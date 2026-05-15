@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Plus, Trash2, Save, RefreshCcw, LogOut } from 'lucide-react';
 import { supabase, hasSupabase } from './lib/supabase';
-import { calculateRows, TARGET_MARGINS } from './lib/calc';
+import { calculateRows, calculateSuggestedPrices, TARGET_MARGINS, SUGGESTED_MARGINS } from './lib/calc';
 import './styles.css';
 
 const CURRENCIES = ['USD', 'GBP', 'EUR', 'HKD', 'CAD', 'AUD', 'CHF', 'SEK', 'NOK', 'DKK', 'MXN', 'ILS', 'JPY'];
@@ -10,7 +10,7 @@ const CURRENCIES = ['USD', 'GBP', 'EUR', 'HKD', 'CAD', 'AUD', 'CHF', 'SEK', 'NOK
 const seed = {
   suppliers: [{ id: 'local-supplier-1', name: 'Default Supplier', cost_per_unit: 9.25, currency: 'USD', local: true }],
   processors: [{ id: 'local-processor-1', name: 'Shopify Payments HK', percent_fee: 3.9, fixed_fee: 2.33, fixed_fee_currency: 'HKD', conversion_fee_percent: 2, active: true, local: true }],
-  markets: [{ id: 'local-market-1', name: 'Astertoria UK', selling_currency: 'GBP', payout_currency: 'HKD', local: true }],
+  markets: [{ id: 'local-market-1', name: 'Default Market', selling_currency: 'GBP', payout_currency: 'HKD', local: true }],
   scenarios: []
 };
 
@@ -29,9 +29,10 @@ function App() {
   const [selectedMarketId, setSelectedMarketId] = useState('');
   const [displayCurrency, setDisplayCurrency] = useState('USD');
   const [opexPercent, setOpexPercent] = useState(5.5);
-  const [scenarioName, setScenarioName] = useState('Astertoria Base');
+  const [scenarioName, setScenarioName] = useState('Default Scenario');
   const [bundleOverrides, setBundleOverrides] = useState({});
   const [rows, setRows] = useState([]);
+  const [suggestedPrices, setSuggestedPrices] = useState([]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -53,8 +54,16 @@ function App() {
 
   useEffect(() => {
     let active = true;
-    calculateRows({ supplier, market, processors, displayCurrency, opexPercent, bundleOverrides })
-      .then(result => { if (active) setRows(result); })
+    Promise.all([
+      calculateRows({ supplier, market, processors, displayCurrency, opexPercent, bundleOverrides }),
+      calculateSuggestedPrices({ supplier, market, processors, opexPercent, bundleOverrides })
+    ])
+      .then(([resultRows, resultSuggestions]) => {
+        if (active) {
+          setRows(resultRows);
+          setSuggestedPrices(resultSuggestions);
+        }
+      })
       .catch(err => setMessage(err.message));
     return () => { active = false; };
   }, [supplier, market, processors, displayCurrency, opexPercent, bundleOverrides]);
@@ -200,9 +209,21 @@ function App() {
     setBundleOverrides(prev => ({ ...prev, [qty]: { ...(prev[qty] || {}), [field]: value } }));
   }
 
+  function applySuggestedPrices(margin) {
+    setBundleOverrides(prev => {
+      const next = { ...prev };
+      for (const item of suggestedPrices) {
+        const match = item.suggestions.find(s => s.margin === margin);
+        if (!match) continue;
+        next[item.qty] = { ...(next[item.qty] || {}), aov: String(match.price) };
+      }
+      return next;
+    });
+  }
+
   if (hasSupabase && !session) {
     return <main className="auth-card">
-      <h1>Asteral BER Calculator</h1>
+      <h1>BER Pricing Calculator</h1>
       <p>Sign in to manage suppliers, processors, markets, and saved scenarios.</p>
       <form onSubmit={handleAuth} className="stack">
         <input placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} />
@@ -217,7 +238,7 @@ function App() {
   return <main>
     <header className="topbar">
       <div>
-        <h1>Asteral BER Calculator</h1>
+        <h1>BER Pricing Calculator</h1>
         <p>Dynamic pricing, payment fees, FX, BEROAS, and target CPP for 1x to 5x bundles.</p>
       </div>
       <div className="top-actions">
@@ -246,15 +267,41 @@ function App() {
       </div>
 
       <div className="panel">
-        <h2>Bundle inputs</h2>
+        <div className="section-head">
+          <div>
+            <h2>Bundle inputs</h2>
+            <p className="hint">AOV is editable, but the app now suggests prices from your COGS, fees, FX, and OpEx.</p>
+          </div>
+        </div>
         <table>
           <thead><tr><th></th>{[1,2,3,4,5].map(q => <th key={q}>{q}x</th>)}</tr></thead>
           <tbody>
             <tr><td>COGS ({supplier?.currency || 'USD'})</td>{[1,2,3,4,5].map(q => <td key={q}><input type="number" step="0.01" value={bundleOverrides[q]?.cogs ?? ''} placeholder={String(Number(supplier?.cost_per_unit || 0) * q)} onChange={e => setBundle(q, 'cogs', e.target.value)} /></td>)}</tr>
-            <tr><td>AOV ({market?.selling_currency || 'GBP'})</td>{[1,2,3,4,5].map(q => <td key={q}><input type="number" step="0.01" value={bundleOverrides[q]?.aov ?? ''} placeholder="0.00" onChange={e => setBundle(q, 'aov', e.target.value)} /></td>)}</tr>
+            <tr><td>AOV ({market?.selling_currency || 'GBP'})</td>{[1,2,3,4,5].map(q => <td key={q}><input type="number" step="0.01" value={bundleOverrides[q]?.aov ?? ''} placeholder={suggestedPrices.find(x => x.qty === q)?.suggestions.find(s => s.margin === 0.20)?.price?.toFixed(2) || '0.00'} onChange={e => setBundle(q, 'aov', e.target.value)} /></td>)}</tr>
           </tbody>
         </table>
       </div>
+    </section>
+
+    <section className="panel wide suggestion-panel">
+      <div className="section-head wrap">
+        <div>
+          <h2>Suggested pricing in {market?.selling_currency || 'selling currency'}</h2>
+          <p className="hint">These are suggested selling prices based on your COGS, active processor fees, conversion fee, and OpEx. Click any margin button to fill the AOV row automatically.</p>
+        </div>
+        <div className="button-row">
+          {SUGGESTED_MARGINS.map(m => <button key={m} onClick={() => applySuggestedPrices(m)}>{m === 0 ? 'Use break-even' : `Use ${Math.round(m*100)}%`}</button>)}
+        </div>
+      </div>
+      <table className="suggestions">
+        <thead><tr><th>Target pre-ad margin</th>{suggestedPrices.map(r => <th key={r.qty}>{r.qty}x</th>)}</tr></thead>
+        <tbody>
+          {SUGGESTED_MARGINS.map(m => <tr key={m}>
+            <td>{m === 0 ? 'Break-even before ads' : `${Math.round(m*100)}% pre-ad margin`}</td>
+            {suggestedPrices.map(r => <td key={r.qty}>{money(r.suggestions.find(s => s.margin === m)?.price || 0, market?.selling_currency || 'USD')}</td>)}
+          </tr>)}
+        </tbody>
+      </table>
     </section>
 
     <section className="grid three">
