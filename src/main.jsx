@@ -7,6 +7,21 @@ import './styles.css';
 
 const CURRENCIES = ['USD', 'GBP', 'EUR', 'HKD', 'CAD', 'AUD', 'CHF', 'SEK', 'NOK', 'DKK', 'MXN', 'ILS', 'JPY'];
 
+const DEFAULT_STATUS_RULES = [
+  { id: 'rule-healthy', label: 'Healthy test', level: 'good', minBer: 0, maxBer: 1.40, text: 'Good room for cold testing. The bundle has enough room to absorb normal early learning noise.' },
+  { id: 'rule-workable', label: 'Workable, watch CPP', level: 'ok', minBer: 1.41, maxBer: 1.80, text: 'Testable, but not comfortable. Watch CPP early and avoid scaling unless the creative is already showing signal.' },
+  { id: 'rule-tight', label: 'Tight economics', level: 'warn', minBer: 1.81, maxBer: 2.40, text: 'Risky for cold testing. Improve price, COGS, fees, or use this mainly as an upsell/bundle after the main offer proves itself.' },
+  { id: 'rule-hard', label: 'Hard to test cold', level: 'bad', minBer: 2.41, maxBer: 999, text: 'BEROAS is too high for a normal cold test. Fix the economics before spending hard, unless you already have proven creatives or very warm traffic.' }
+];
+
+const RECOMMENDATION_LEVELS = [
+  { value: 'good', label: 'Green' },
+  { value: 'ok', label: 'Blue' },
+  { value: 'warn', label: 'Yellow' },
+  { value: 'bad', label: 'Red' },
+  { value: 'neutral', label: 'Grey' }
+];
+
 const seed = {
   suppliers: [{ id: 'local-supplier-1', name: 'Default Supplier', cost_per_unit: 9.25, currency: 'USD', local: true }],
   processors: [{ id: 'local-processor-1', name: 'Shopify Payments', percent_fee: 3.9, fixed_fee: 2.33, fixed_fee_currency: 'HKD', conversion_fee_percent: 2, active: true, local: true }],
@@ -39,6 +54,13 @@ function App() {
   const [rows, setRows] = useState([]);
   const [suggestedPrices, setSuggestedPrices] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [recommendationRules, setRecommendationRules] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('ber_recommendation_rules')) || DEFAULT_STATUS_RULES;
+    } catch {
+      return DEFAULT_STATUS_RULES;
+    }
+  });
 
   useEffect(() => {
     if (!hasSupabase) {
@@ -58,7 +80,7 @@ function App() {
   const market = useMemo(() => markets.find(m => m.id === selectedMarketId), [markets, selectedMarketId]);
   const activeProcessorCount = processors.filter(p => p.active).length;
   const matchingPricePresets = useMemo(() => pricePresets.filter(p => p.currency === (market?.selling_currency || 'GBP')), [pricePresets, market]);
-  const recommendations = useMemo(() => buildRecommendations(rows), [rows]);
+  const recommendations = useMemo(() => buildRecommendations(rows, recommendationRules), [rows, recommendationRules]);
 
   useEffect(() => {
     let active = true;
@@ -269,6 +291,33 @@ function App() {
     updateEntity('markets', markets, setMarkets, market.id, { selling_currency: currency });
   }
 
+  function saveRecommendationRules(next) {
+    setRecommendationRules(next);
+    localStorage.setItem('ber_recommendation_rules', JSON.stringify(next));
+  }
+
+  function addRecommendationRule() {
+    const next = [
+      ...recommendationRules,
+      { id: crypto.randomUUID(), label: 'New status', level: 'neutral', minBer: 0, maxBer: 0, text: 'Write your recommendation here.' }
+    ];
+    saveRecommendationRules(next);
+  }
+
+  function updateRecommendationRule(id, patch) {
+    const next = recommendationRules.map(rule => rule.id === id ? { ...rule, ...patch } : rule);
+    saveRecommendationRules(next);
+  }
+
+  function removeRecommendationRule(id) {
+    const next = recommendationRules.filter(rule => rule.id !== id);
+    saveRecommendationRules(next.length ? next : DEFAULT_STATUS_RULES);
+  }
+
+  function resetRecommendationRules() {
+    saveRecommendationRules(DEFAULT_STATUS_RULES);
+  }
+
   function applySuggestedPrices(margin) {
     setBundleOverrides(prev => {
       const next = { ...prev };
@@ -358,7 +407,7 @@ function App() {
 
       <div className="panel inputs-panel">
         <div className="section-head wrap">
-          <PanelTitle title="Bundle pricing" subtitle="Enter bundle COGS, then use the suggested prices below." />
+          <PanelTitle title="Bundle pricing" subtitle="Enter bundle COGS, then apply or edit selling prices." />
           <Field label="Selling price currency" compact><select value={market?.selling_currency || 'GBP'} onChange={e => updateSelectedMarketSellingCurrency(e.target.value)}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select></Field>
         </div>
         <div className="table-card">
@@ -469,7 +518,28 @@ function App() {
     </section>
 
     <section className="panel wide recommendation-panel">
-      <PanelTitle title="Launch recommendation" subtitle="Read this after setting your SRP or suggested prices." />
+      <div className="section-head wrap">
+        <PanelTitle title="Launch recommendation" subtitle="The status cards use your own BEROAS rules. Edit the ranges and messages below, no code changes needed." />
+        <div className="button-row">
+          <button className="secondary small" onClick={addRecommendationRule}><Plus size={16}/> Add status</button>
+          <button className="secondary small" onClick={resetRecommendationRules}>Reset rules</button>
+        </div>
+      </div>
+      <div className="status-rules">
+        <div className="status-rule-header">
+          <span>Status</span><span>From BEROAS</span><span>To BEROAS</span><span>Color</span><span>Recommendation text</span><span></span>
+        </div>
+        {recommendationRules.map(rule => <div className="status-rule-row" key={rule.id}>
+          <input value={rule.label} onChange={e => updateRecommendationRule(rule.id, { label: e.target.value })} />
+          <input type="number" step="0.01" value={rule.minBer} onChange={e => updateRecommendationRule(rule.id, { minBer: Number(e.target.value) })} />
+          <input type="number" step="0.01" value={rule.maxBer} onChange={e => updateRecommendationRule(rule.id, { maxBer: Number(e.target.value) })} />
+          <select value={rule.level} onChange={e => updateRecommendationRule(rule.id, { level: e.target.value })}>
+            {RECOMMENDATION_LEVELS.map(level => <option key={level.value} value={level.value}>{level.label}</option>)}
+          </select>
+          <textarea value={rule.text} onChange={e => updateRecommendationRule(rule.id, { text: e.target.value })} />
+          <IconButton onClick={() => removeRecommendationRule(rule.id)} />
+        </div>)}
+      </div>
       <div className="recommendation-grid">
         {recommendations.map(item => <div key={item.qty} className={`recommendation-card ${item.level}`}>
           <div className="recommendation-top"><strong>{item.qty}x</strong><span>{item.label}</span></div>
@@ -496,23 +566,33 @@ function money(v, currency) { return new Intl.NumberFormat('en-US', { style: 'cu
 function pct(v) { return `${Number(v || 0).toFixed(2)}%`; }
 function num(v) { return Number(v || 0).toFixed(2); }
 
-function buildRecommendations(rows) {
+function buildRecommendations(rows, rules = DEFAULT_STATUS_RULES) {
+  const cleanRules = [...(rules || [])]
+    .map(rule => ({
+      ...rule,
+      minBer: Number(rule.minBer || 0),
+      maxBer: Number(rule.maxBer || 0)
+    }))
+    .sort((a, b) => a.minBer - b.minBer);
+
   return rows.map(r => {
     const ber = Number(r.ber || 0);
     const cpp = Number(r.preAdProfit || 0);
     if (!r.aovDisplay) {
       return { qty: r.qty, ber, breakEvenCpp: cpp, level: 'neutral', label: 'No price yet', text: 'Add a selling price or apply an SRP preset first.' };
     }
-    if (ber <= 1.7) {
-      return { qty: r.qty, ber, breakEvenCpp: cpp, level: 'good', label: 'Healthy test', text: 'Good room for testing. This bundle can survive a normal learning phase if the offer and creative are decent.' };
+    const match = cleanRules.find(rule => ber >= rule.minBer && ber <= rule.maxBer);
+    if (!match) {
+      return { qty: r.qty, ber, breakEvenCpp: cpp, level: 'neutral', label: 'No matching status', text: 'No status rule covers this BEROAS range yet. Add or edit a rule below.' };
     }
-    if (ber <= 2.2) {
-      return { qty: r.qty, ber, breakEvenCpp: cpp, level: 'ok', label: 'Workable', text: 'Still testable, but watch CPP early. You need cleaner targeting, stronger hooks, or better bundle positioning.' };
-    }
-    if (ber <= 3.0) {
-      return { qty: r.qty, ber, breakEvenCpp: cpp, level: 'warn', label: 'Tight economics', text: 'Risky for cold testing. Improve price, COGS, fees, or push this bundle only as an upsell or warmer offer.' };
-    }
-    return { qty: r.qty, ber, breakEvenCpp: cpp, level: 'bad', label: 'Hard to test', text: 'BEROAS is too high for a normal cold test. Fix the economics before spending hard, unless you already have proven creatives.' };
+    return {
+      qty: r.qty,
+      ber,
+      breakEvenCpp: cpp,
+      level: match.level || 'neutral',
+      label: match.label || 'Custom status',
+      text: match.text || 'No recommendation text set.'
+    };
   });
 }
 
