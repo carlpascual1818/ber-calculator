@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Plus, Trash2, Save, RefreshCcw, LogOut, Database, Store, CreditCard, Package, Calculator, FolderOpen, Lightbulb, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Plus, Trash2, Save, RefreshCcw, LogOut, Database, Store, CreditCard, Package, Calculator, FolderOpen, Lightbulb, AlertTriangle, CheckCircle2, Settings } from 'lucide-react';
 import { supabase, hasSupabase } from './lib/supabase';
 import { calculateRows, calculateSuggestedPrices, TARGET_MARGINS, SUGGESTED_MARGINS } from './lib/calc';
 import './styles.css';
@@ -54,6 +54,7 @@ function App() {
   const [rows, setRows] = useState([]);
   const [suggestedPrices, setSuggestedPrices] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [recommendationRules, setRecommendationRules] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('ber_recommendation_rules')) || DEFAULT_STATUS_RULES;
@@ -355,6 +356,7 @@ function App() {
         <p>Build reusable supplier, market, and processor profiles. Then create pricing scenarios without changing code.</p>
       </div>
       <div className="top-actions">
+        <button className="secondary" onClick={() => setSettingsOpen(!settingsOpen)}><Settings size={16}/> {settingsOpen ? 'Close settings' : 'Settings'}</button>
         <button className="secondary" onClick={loadData}><RefreshCcw size={16}/> Refresh</button>
         {hasSupabase && <button className="secondary" onClick={() => supabase.auth.signOut()}><LogOut size={16}/> Sign out</button>}
       </div>
@@ -363,30 +365,103 @@ function App() {
     {message && <div className="notice">{message}</div>}
     {!hasSupabase && <div className="notice">Local mode: add Supabase env vars in Vercel to save data in the cloud.</div>}
 
-    <section className="workflow panel">
-      <WorkflowStep icon={<Package size={18}/>} title="1. Supplier" text="Enter real bundle COGS by supplier currency." />
-      <WorkflowStep icon={<Store size={18}/>} title="2. Market" text="Set selling currency and payout currency." />
-      <WorkflowStep icon={<CreditCard size={18}/>} title="3. Payments" text="Add processors, fixed fees, and FX fee." />
-      <WorkflowStep icon={<Calculator size={18}/>} title="4. Price" text="Apply SRP presets or suggested prices." />
+    <section className="workspace-bar panel">
+      <div>
+        <div className="eyebrow">Current setup</div>
+        <h2>{scenarioName}</h2>
+        <p>{supplier?.name || 'No supplier'} · {market?.name || 'No market'} · {activeProcessorCount} active processor{activeProcessorCount === 1 ? '' : 's'} · Results in {displayCurrency}</p>
+      </div>
+      <div className="workspace-actions">
+        <button onClick={() => setSettingsOpen(!settingsOpen)}><Settings size={16}/> {settingsOpen ? 'Hide settings' : 'Open settings'}</button>
+        <button className="secondary" onClick={saveScenario}><Save size={16}/> Save scenario</button>
+      </div>
     </section>
 
-    <section className="panel instruction-panel">
+    {settingsOpen && <section className="settings-center panel wide">
       <div className="section-head wrap">
-        <PanelTitle title="How to use this" subtitle="Use this as a decision tool before launching or scaling a product." />
+        <PanelTitle title="Settings" subtitle="Manage suppliers, markets, payment processors, SRP presets, and BEROAS status rules here. The calculator below stays clean." />
+        <button className="secondary small" onClick={() => setSettingsOpen(false)}>Done</button>
       </div>
-      <div className="instruction-grid">
-        <Instruction icon={<CheckCircle2 size={17}/>} title="Start with SRP" text="Use your default market prices first, then check BEROAS and CPP." />
-        <Instruction icon={<Lightbulb size={17}/>} title="BEROAS meaning" text="BEROAS is the minimum Meta ROAS needed to break even after fees, COGS, and OpEx." />
-        <Instruction icon={<AlertTriangle size={17}/>} title="When to be careful" text="If BEROAS is high, the test needs a stronger offer, higher price, lower COGS, or better bundle strategy." />
-      </div>
-    </section>
 
-    <section className="grid dashboard-grid">
-      <StatusCard icon={<Package size={18}/>} label="Selected supplier" value={supplier?.name || 'None'} meta={`COGS currency: ${supplier?.currency || '-'}`} />
-      <StatusCard icon={<Store size={18}/>} label="Selected market" value={market?.name || 'None'} meta={`${market?.selling_currency || '-'} sales → ${market?.payout_currency || '-'} payout`} />
-      <StatusCard icon={<CreditCard size={18}/>} label="Active processors" value={String(activeProcessorCount)} meta="Averaged for planning" />
-      <StatusCard icon={<Database size={18}/>} label="Results currency" value={displayCurrency} meta="Used for ROAS and CPP view" />
-    </section>
+      <div className="settings-grid">
+        <div className="settings-card">
+          <EntityPanel title="Suppliers" subtitle="Supplier cost profiles and COGS currency." add={addSupplier} fields={['Name', '1x COGS', 'Currency', '']} noPanel>
+            {suppliers.map(s => <div className="entity supplier-entity" key={s.id}>
+              <input value={s.name} onChange={e => updateEntity('suppliers', suppliers, setSuppliers, s.id, { name: e.target.value })}/>
+              <input type="number" step="0.01" value={s.cost_per_unit} onChange={e => updateEntity('suppliers', suppliers, setSuppliers, s.id, { cost_per_unit: Number(e.target.value) })}/>
+              <select value={s.currency} onChange={e => updateEntity('suppliers', suppliers, setSuppliers, s.id, { currency: e.target.value })}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select>
+              <IconButton onClick={() => removeEntity('suppliers', suppliers, setSuppliers, s.id)} />
+            </div>)}
+          </EntityPanel>
+        </div>
+
+        <div className="settings-card">
+          <EntityPanel title="Markets" subtitle="Selling currency and payout currency by market." add={addMarket} fields={['Name', 'Selling', 'Payout', '']} noPanel>
+            {markets.map(m => <div className="entity market-entity" key={m.id}>
+              <input value={m.name} onChange={e => updateEntity('markets', markets, setMarkets, m.id, { name: e.target.value })}/>
+              <select value={m.selling_currency} onChange={e => updateEntity('markets', markets, setMarkets, m.id, { selling_currency: e.target.value })}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select>
+              <select value={m.payout_currency} onChange={e => updateEntity('markets', markets, setMarkets, m.id, { payout_currency: e.target.value })}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select>
+              <IconButton onClick={() => removeEntity('markets', markets, setMarkets, m.id)} />
+            </div>)}
+          </EntityPanel>
+        </div>
+      </div>
+
+      <div className="settings-card settings-full">
+        <EntityPanel title="Payment processors" subtitle="Turn processors on/off. Active processors are averaged for planning." add={addProcessor} fields={['Name', '% fee', 'Fixed', 'Fixed currency', 'FX %', 'Active', '']} noPanel>
+          {processors.map(p => <div className="entity processor" key={p.id}>
+            <input value={p.name} onChange={e => updateEntity('payment_processors', processors, setProcessors, p.id, { name: e.target.value })}/>
+            <input type="number" step="0.01" value={p.percent_fee} onChange={e => updateEntity('payment_processors', processors, setProcessors, p.id, { percent_fee: Number(e.target.value) })} />
+            <input type="number" step="0.01" value={p.fixed_fee} onChange={e => updateEntity('payment_processors', processors, setProcessors, p.id, { fixed_fee: Number(e.target.value) })} />
+            <select value={p.fixed_fee_currency} onChange={e => updateEntity('payment_processors', processors, setProcessors, p.id, { fixed_fee_currency: e.target.value })}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select>
+            <input type="number" step="0.01" value={p.conversion_fee_percent} onChange={e => updateEntity('payment_processors', processors, setProcessors, p.id, { conversion_fee_percent: Number(e.target.value) })} />
+            <label className="switch"><input type="checkbox" checked={p.active} onChange={e => updateEntity('payment_processors', processors, setProcessors, p.id, { active: e.target.checked })}/><span/></label>
+            <IconButton onClick={() => removeEntity('payment_processors', processors, setProcessors, p.id)} />
+          </div>)}
+        </EntityPanel>
+      </div>
+
+      <div className="settings-card settings-full">
+        <div className="section-head wrap">
+          <PanelTitle title={`SRP presets for ${market?.selling_currency || 'selling currency'}`} subtitle="Manage default selling prices by currency. Add or edit presets here, not in code." />
+          <button onClick={addPricePreset}><Plus size={16}/> Add SRP preset</button>
+        </div>
+        <div className="preset-list">
+          {matchingPricePresets.length ? matchingPricePresets.map(preset => <div className="preset-row" key={preset.id}>
+            <input value={preset.name} onChange={e => updatePricePreset(preset.id, { name: e.target.value })} />
+            <select value={preset.currency} onChange={e => updatePricePreset(preset.id, { currency: e.target.value })}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select>
+            {[1,2,3,4,5].map(q => <input key={q} type="number" step="0.01" value={preset.prices?.[q] ?? ''} placeholder={`${q}x`} onChange={e => updatePricePreset(preset.id, { prices: { ...(preset.prices || {}), [q]: Number(e.target.value) } })} />)}
+            <button className="secondary small" onClick={() => applyPricePreset(preset)}>Use SRP</button>
+            <IconButton onClick={() => removePricePreset(preset.id)} />
+          </div>) : <p className="empty-text">No SRP preset for this selling currency yet. Click Add SRP preset to create one.</p>}
+        </div>
+      </div>
+
+      <div className="settings-card settings-full">
+        <div className="section-head wrap">
+          <PanelTitle title="BEROAS status rules" subtitle="Set your own launch recommendation ranges and messages." />
+          <div className="button-row">
+            <button className="secondary small" onClick={addRecommendationRule}><Plus size={16}/> Add status</button>
+            <button className="secondary small" onClick={resetRecommendationRules}>Reset rules</button>
+          </div>
+        </div>
+        <div className="status-rules">
+          <div className="status-rule-header">
+            <span>Status</span><span>From BEROAS</span><span>To BEROAS</span><span>Color</span><span>Recommendation text</span><span></span>
+          </div>
+          {recommendationRules.map(rule => <div className="status-rule-row" key={rule.id}>
+            <input value={rule.label} onChange={e => updateRecommendationRule(rule.id, { label: e.target.value })} />
+            <input type="number" step="0.01" value={rule.minBer} onChange={e => updateRecommendationRule(rule.id, { minBer: Number(e.target.value) })} />
+            <input type="number" step="0.01" value={rule.maxBer} onChange={e => updateRecommendationRule(rule.id, { maxBer: Number(e.target.value) })} />
+            <select value={rule.level} onChange={e => updateRecommendationRule(rule.id, { level: e.target.value })}>
+              {RECOMMENDATION_LEVELS.map(level => <option key={level.value} value={level.value}>{level.label}</option>)}
+            </select>
+            <textarea value={rule.text} onChange={e => updateRecommendationRule(rule.id, { text: e.target.value })} />
+            <IconButton onClick={() => removeRecommendationRule(rule.id)} />
+          </div>)}
+        </div>
+      </div>
+    </section>}
 
     <section className="grid setup-grid">
       <div className="panel scenario-panel">
@@ -422,22 +497,6 @@ function App() {
       </div>
     </section>
 
-    <section className="panel wide preset-panel">
-      <div className="section-head wrap">
-        <PanelTitle title={`SRP presets for ${market?.selling_currency || 'selling currency'}`} subtitle="Manage default selling prices by currency. Add or edit presets here, not in code." />
-        <button onClick={addPricePreset}><Plus size={16}/> Add SRP preset</button>
-      </div>
-      <div className="preset-list">
-        {matchingPricePresets.length ? matchingPricePresets.map(preset => <div className="preset-row" key={preset.id}>
-          <input value={preset.name} onChange={e => updatePricePreset(preset.id, { name: e.target.value })} />
-          <select value={preset.currency} onChange={e => updatePricePreset(preset.id, { currency: e.target.value })}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select>
-          {[1,2,3,4,5].map(q => <input key={q} type="number" step="0.01" value={preset.prices?.[q] ?? ''} placeholder={`${q}x`} onChange={e => updatePricePreset(preset.id, { prices: { ...(preset.prices || {}), [q]: Number(e.target.value) } })} />)}
-          <button className="secondary small" onClick={() => applyPricePreset(preset)}>Use SRP</button>
-          <IconButton onClick={() => removePricePreset(preset.id)} />
-        </div>) : <p className="empty-text">No SRP preset for this selling currency yet. Click Add SRP preset to create one.</p>}
-      </div>
-    </section>
-
     <section className="panel wide suggestion-panel">
       <div className="section-head wrap">
         <PanelTitle title={`Suggested prices in ${market?.selling_currency || 'selling currency'}`} subtitle="Prices are calculated from COGS, active processor fees, FX fee, and OpEx. Choose a target to fill the selling price row." />
@@ -456,40 +515,6 @@ function App() {
           </tbody>
         </table>
       </div>
-    </section>
-
-    <section className="grid entity-grid">
-      <EntityPanel title="Suppliers" subtitle="Manage supplier cost profiles." add={addSupplier} fields={['Name', '1x COGS', 'Currency', '']}>
-        {suppliers.map(s => <div className="entity supplier-entity" key={s.id}>
-          <input value={s.name} onChange={e => updateEntity('suppliers', suppliers, setSuppliers, s.id, { name: e.target.value })}/>
-          <input type="number" step="0.01" value={s.cost_per_unit} onChange={e => updateEntity('suppliers', suppliers, setSuppliers, s.id, { cost_per_unit: Number(e.target.value) })}/>
-          <select value={s.currency} onChange={e => updateEntity('suppliers', suppliers, setSuppliers, s.id, { currency: e.target.value })}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select>
-          <IconButton onClick={() => removeEntity('suppliers', suppliers, setSuppliers, s.id)} />
-        </div>)}
-      </EntityPanel>
-
-      <EntityPanel title="Markets" subtitle="Manage selling and payout currencies." add={addMarket} fields={['Name', 'Selling', 'Payout', '']}>
-        {markets.map(m => <div className="entity market-entity" key={m.id}>
-          <input value={m.name} onChange={e => updateEntity('markets', markets, setMarkets, m.id, { name: e.target.value })}/>
-          <select value={m.selling_currency} onChange={e => updateEntity('markets', markets, setMarkets, m.id, { selling_currency: e.target.value })}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select>
-          <select value={m.payout_currency} onChange={e => updateEntity('markets', markets, setMarkets, m.id, { payout_currency: e.target.value })}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select>
-          <IconButton onClick={() => removeEntity('markets', markets, setMarkets, m.id)} />
-        </div>)}
-      </EntityPanel>
-    </section>
-
-    <section className="panel processors-panel">
-      <EntityPanel title="Payment processors" subtitle="Turn processors on/off. Active processors are averaged for planning." add={addProcessor} fields={['Name', '% fee', 'Fixed', 'Fixed currency', 'FX %', 'Active', '']} noPanel>
-        {processors.map(p => <div className="entity processor" key={p.id}>
-          <input value={p.name} onChange={e => updateEntity('payment_processors', processors, setProcessors, p.id, { name: e.target.value })}/>
-          <input type="number" step="0.01" value={p.percent_fee} onChange={e => updateEntity('payment_processors', processors, setProcessors, p.id, { percent_fee: Number(e.target.value) })} />
-          <input type="number" step="0.01" value={p.fixed_fee} onChange={e => updateEntity('payment_processors', processors, setProcessors, p.id, { fixed_fee: Number(e.target.value) })} />
-          <select value={p.fixed_fee_currency} onChange={e => updateEntity('payment_processors', processors, setProcessors, p.id, { fixed_fee_currency: e.target.value })}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select>
-          <input type="number" step="0.01" value={p.conversion_fee_percent} onChange={e => updateEntity('payment_processors', processors, setProcessors, p.id, { conversion_fee_percent: Number(e.target.value) })} />
-          <label className="switch"><input type="checkbox" checked={p.active} onChange={e => updateEntity('payment_processors', processors, setProcessors, p.id, { active: e.target.checked })}/><span/></label>
-          <IconButton onClick={() => removeEntity('payment_processors', processors, setProcessors, p.id)} />
-        </div>)}
-      </EntityPanel>
     </section>
 
     <section className="panel wide results-panel">
@@ -519,26 +544,8 @@ function App() {
 
     <section className="panel wide recommendation-panel">
       <div className="section-head wrap">
-        <PanelTitle title="Launch recommendation" subtitle="The status cards use your own BEROAS rules. Edit the ranges and messages below, no code changes needed." />
-        <div className="button-row">
-          <button className="secondary small" onClick={addRecommendationRule}><Plus size={16}/> Add status</button>
-          <button className="secondary small" onClick={resetRecommendationRules}>Reset rules</button>
-        </div>
-      </div>
-      <div className="status-rules">
-        <div className="status-rule-header">
-          <span>Status</span><span>From BEROAS</span><span>To BEROAS</span><span>Color</span><span>Recommendation text</span><span></span>
-        </div>
-        {recommendationRules.map(rule => <div className="status-rule-row" key={rule.id}>
-          <input value={rule.label} onChange={e => updateRecommendationRule(rule.id, { label: e.target.value })} />
-          <input type="number" step="0.01" value={rule.minBer} onChange={e => updateRecommendationRule(rule.id, { minBer: Number(e.target.value) })} />
-          <input type="number" step="0.01" value={rule.maxBer} onChange={e => updateRecommendationRule(rule.id, { maxBer: Number(e.target.value) })} />
-          <select value={rule.level} onChange={e => updateRecommendationRule(rule.id, { level: e.target.value })}>
-            {RECOMMENDATION_LEVELS.map(level => <option key={level.value} value={level.value}>{level.label}</option>)}
-          </select>
-          <textarea value={rule.text} onChange={e => updateRecommendationRule(rule.id, { text: e.target.value })} />
-          <IconButton onClick={() => removeRecommendationRule(rule.id)} />
-        </div>)}
+        <PanelTitle title="Launch recommendation" subtitle="Based on your saved BEROAS status rules. Edit rules inside Settings." />
+        <button className="secondary small" onClick={() => setSettingsOpen(true)}><Settings size={16}/> Edit rules</button>
       </div>
       <div className="recommendation-grid">
         {recommendations.map(item => <div key={item.qty} className={`recommendation-card ${item.level}`}>

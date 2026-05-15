@@ -315,3 +315,54 @@ button.small {
     grid-column: 1 / -1;
   }
 }
+
+/* Settings-first layout cleanup */
+.workspace-bar {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:18px;
+  margin-bottom:16px;
+}
+.workspace-bar h2 {
+  margin:4px 0 6px;
+  font-size:22px;
+  letter-spacing:-.03em;
+}
+.workspace-bar p {
+  margin:0;
+  color:var(--muted);
+  line-height:1.45;
+}
+.workspace-actions {
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+}
+.settings-center {
+  margin-bottom:16px;
+  border:1px solid rgba(37,99,235,.20);
+  background:linear-gradient(135deg,#ffffff 0%,#f8fbff 100%);
+}
+.settings-grid {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:14px;
+  margin-bottom:14px;
+}
+.settings-card {
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:20px;
+  padding:16px;
+  box-shadow:0 8px 24px rgba(15,23,42,.04);
+}
+.settings-full {
+  margin-top:14px;
+}
+@media (max-width:1100px) {
+  .workspace-bar { align-items:flex-start; flex-direction:column; }
+  .workspace-actions { justify-content:flex-start; }
+  .settings-grid { grid-template-columns:1fr; }
+}
