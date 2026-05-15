@@ -1,32 +1,29 @@
-export default async function handler(req, res) {
-  try {
-    const from = String(req.query.from || '').toUpperCase();
-    const to = String(req.query.to || '').toUpperCase();
+const memoryCache = new Map();
 
-    if (!from || !to) {
-      return res.status(400).json({ error: 'Missing from or to currency.' });
-    }
+export async function convertCurrency(amount, from, to) {
+  const value = Number(amount || 0);
+  if (!Number.isFinite(value)) return 0;
+  if (!from || !to || from === to) return value;
 
-    if (from === to) {
-      return res.status(200).json({ from, to, rate: 1 });
-    }
+  const cleanFrom = String(from).toUpperCase();
+  const cleanTo = String(to).toUpperCase();
+  const key = `${cleanFrom}_${cleanTo}`;
 
-    const url = `https://api.frankfurter.app/latest?amount=1&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
-    const response = await fetch(url);
+  if (memoryCache.has(key)) return value * memoryCache.get(key);
 
-    if (!response.ok) {
-      return res.status(response.status).json({ error: `Frankfurter request failed for ${from} to ${to}.` });
-    }
+  const res = await fetch(`/api/fx?from=${encodeURIComponent(cleanFrom)}&to=${encodeURIComponent(cleanTo)}`);
+  if (!res.ok) throw new Error(`FX lookup failed for ${cleanFrom} to ${cleanTo}`);
 
-    const data = await response.json();
-    const rate = Number(data?.rates?.[to]);
+  const data = await res.json();
+  const rate = Number(data?.rate);
+  if (!rate) throw new Error(`FX rate missing for ${cleanFrom} to ${cleanTo}`);
 
-    if (!rate) {
-      return res.status(500).json({ error: `FX rate missing for ${from} to ${to}.` });
-    }
+  memoryCache.set(key, rate);
+  return value * rate;
+}
 
-    return res.status(200).json({ from, to, rate });
-  } catch (error) {
-    return res.status(500).json({ error: error.message || 'FX lookup failed.' });
-  }
+export async function getLatestRate(from, to) {
+  if (!from || !to || from === to) return 1;
+  const converted = await convertCurrency(1, from, to);
+  return converted;
 }
