@@ -1,24 +1,32 @@
-const memoryCache = new Map();
+export default async function handler(req, res) {
+  try {
+    const from = String(req.query.from || '').toUpperCase();
+    const to = String(req.query.to || '').toUpperCase();
 
-export async function convertCurrency(amount, from, to) {
-  const value = Number(amount || 0);
-  if (!Number.isFinite(value)) return 0;
-  if (!from || !to || from === to) return value;
+    if (!from || !to) {
+      return res.status(400).json({ error: 'Missing from or to currency.' });
+    }
 
-  const key = `${from}_${to}`;
-  if (memoryCache.has(key)) return value * memoryCache.get(key);
+    if (from === to) {
+      return res.status(200).json({ from, to, rate: 1 });
+    }
 
-  const res = await fetch(`https://api.frankfurter.app/latest?amount=1&from=${from}&to=${to}`);
-  if (!res.ok) throw new Error(`FX lookup failed for ${from} to ${to}`);
-  const data = await res.json();
-  const rate = data?.rates?.[to];
-  if (!rate) throw new Error(`FX rate missing for ${from} to ${to}`);
-  memoryCache.set(key, rate);
-  return value * rate;
-}
+    const url = `https://api.frankfurter.app/latest?amount=1&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+    const response = await fetch(url);
 
-export async function getLatestRate(from, to) {
-  if (!from || !to || from === to) return 1;
-  const converted = await convertCurrency(1, from, to);
-  return converted;
+    if (!response.ok) {
+      return res.status(response.status).json({ error: `Frankfurter request failed for ${from} to ${to}.` });
+    }
+
+    const data = await response.json();
+    const rate = Number(data?.rates?.[to]);
+
+    if (!rate) {
+      return res.status(500).json({ error: `FX rate missing for ${from} to ${to}.` });
+    }
+
+    return res.status(200).json({ from, to, rate });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'FX lookup failed.' });
+  }
 }
