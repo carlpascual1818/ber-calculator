@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Plus, Trash2, Save, RefreshCcw, LogOut, Database, Store, CreditCard, Package, Calculator, FolderOpen } from 'lucide-react';
+import { Plus, Trash2, Save, RefreshCcw, LogOut, Database, Store, CreditCard, Package, Calculator, FolderOpen, Lightbulb, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { supabase, hasSupabase } from './lib/supabase';
 import { calculateRows, calculateSuggestedPrices, TARGET_MARGINS, SUGGESTED_MARGINS } from './lib/calc';
 import './styles.css';
@@ -11,6 +11,10 @@ const seed = {
   suppliers: [{ id: 'local-supplier-1', name: 'Default Supplier', cost_per_unit: 9.25, currency: 'USD', local: true }],
   processors: [{ id: 'local-processor-1', name: 'Shopify Payments', percent_fee: 3.9, fixed_fee: 2.33, fixed_fee_currency: 'HKD', conversion_fee_percent: 2, active: true, local: true }],
   markets: [{ id: 'local-market-1', name: 'Default Market', selling_currency: 'GBP', payout_currency: 'HKD', local: true }],
+  pricePresets: [
+    { id: 'local-preset-gbp', name: 'Default GBP SRP', currency: 'GBP', prices: { 1: 24.95, 2: 34.95, 3: 44.95, 4: 54.95, 5: 64.95 }, local: true },
+    { id: 'local-preset-eur', name: 'Default EUR SRP', currency: 'EUR', prices: { 1: 29.95, 2: 39.95, 3: 49.95, 4: 59.95, 5: 69.95 }, local: true }
+  ],
   scenarios: []
 };
 
@@ -25,6 +29,7 @@ function App() {
   const [processors, setProcessors] = useState([]);
   const [markets, setMarkets] = useState([]);
   const [scenarios, setScenarios] = useState([]);
+  const [pricePresets, setPricePresets] = useState([]);
   const [selectedSupplierId, setSelectedSupplierId] = useState('');
   const [selectedMarketId, setSelectedMarketId] = useState('');
   const [displayCurrency, setDisplayCurrency] = useState('USD');
@@ -52,6 +57,8 @@ function App() {
   const supplier = useMemo(() => suppliers.find(s => s.id === selectedSupplierId), [suppliers, selectedSupplierId]);
   const market = useMemo(() => markets.find(m => m.id === selectedMarketId), [markets, selectedMarketId]);
   const activeProcessorCount = processors.filter(p => p.active).length;
+  const matchingPricePresets = useMemo(() => pricePresets.filter(p => p.currency === (market?.selling_currency || 'GBP')), [pricePresets, market]);
+  const recommendations = useMemo(() => buildRecommendations(rows), [rows]);
 
   useEffect(() => {
     let active = true;
@@ -96,11 +103,13 @@ function App() {
         supabase.from('markets').select('*').order('created_at'),
         supabase.from('scenarios').select('*').order('created_at', { ascending: false })
       ]);
+      const presetsResult = await supabase.from('price_presets').select('*').order('created_at');
       for (const result of [s, p, m, sc]) if (result.error) throw result.error;
       setSuppliers(s.data.length ? s.data : seed.suppliers);
       setProcessors(p.data.length ? p.data : seed.processors);
       setMarkets(m.data.length ? m.data : seed.markets);
       setScenarios(sc.data || []);
+      setPricePresets(presetsResult.error ? seed.pricePresets : (presetsResult.data.length ? presetsResult.data : seed.pricePresets));
       setSelectedSupplierId((s.data[0] || seed.suppliers[0]).id);
       setSelectedMarketId((m.data[0] || seed.markets[0]).id);
     } catch (err) {
@@ -116,13 +125,14 @@ function App() {
     setProcessors(saved.processors);
     setMarkets(saved.markets);
     setScenarios(saved.scenarios || []);
+    setPricePresets(saved.pricePresets || seed.pricePresets);
     setSelectedSupplierId(saved.suppliers[0]?.id || '');
     setSelectedMarketId(saved.markets[0]?.id || '');
   }
 
   function saveLocal(next) {
     if (hasSupabase) return;
-    const data = { suppliers, processors, markets, scenarios, ...next };
+    const data = { suppliers, processors, markets, scenarios, pricePresets, ...next };
     localStorage.setItem('ber_local_data', JSON.stringify(data));
   }
 
@@ -182,6 +192,50 @@ function App() {
       const { error } = await supabase.from(table).delete().eq('id', id);
       if (error) setMessage(error.message);
     }
+  }
+
+
+  async function addPricePreset() {
+    const currency = market?.selling_currency || 'GBP';
+    const item = { name: `New ${currency} SRP`, currency, prices: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 } };
+    if (hasSupabase) {
+      const { data, error } = await supabase.from('price_presets').insert(item).select().single();
+      if (error) return setMessage('Price presets table is missing. Run the price_presets migration SQL once, then try again.');
+      setPricePresets([...pricePresets, data]);
+    } else {
+      const data = { ...item, id: crypto.randomUUID(), local: true };
+      const next = [...pricePresets, data]; setPricePresets(next); saveLocal({ pricePresets: next });
+    }
+  }
+
+  async function updatePricePreset(id, patch) {
+    const next = pricePresets.map(x => x.id === id ? { ...x, ...patch } : x);
+    setPricePresets(next);
+    saveLocal({ pricePresets: next });
+    if (hasSupabase) {
+      const { error } = await supabase.from('price_presets').update(patch).eq('id', id);
+      if (error) setMessage('Price presets table is missing. Run the price_presets migration SQL once, then try again.');
+    }
+  }
+
+  async function removePricePreset(id) {
+    const next = pricePresets.filter(x => x.id !== id);
+    setPricePresets(next);
+    saveLocal({ pricePresets: next });
+    if (hasSupabase) {
+      const { error } = await supabase.from('price_presets').delete().eq('id', id);
+      if (error) setMessage(error.message);
+    }
+  }
+
+  function applyPricePreset(preset) {
+    setBundleOverrides(prev => {
+      const next = { ...prev };
+      for (let qty = 1; qty <= 5; qty++) {
+        next[qty] = { ...(next[qty] || {}), aov: String(preset.prices?.[qty] || '') };
+      }
+      return next;
+    });
   }
 
   async function saveScenario() {
@@ -261,10 +315,21 @@ function App() {
     {!hasSupabase && <div className="notice">Local mode: add Supabase env vars in Vercel to save data in the cloud.</div>}
 
     <section className="workflow panel">
-      <WorkflowStep icon={<Package size={18}/>} title="1. Supplier" text="Add supplier cost and currency." />
-      <WorkflowStep icon={<Store size={18}/>} title="2. Market" text="Set selling and payout currency." />
-      <WorkflowStep icon={<CreditCard size={18}/>} title="3. Payments" text="Add fees and turn processors on/off." />
-      <WorkflowStep icon={<Calculator size={18}/>} title="4. Price" text="Use suggested prices, then save." />
+      <WorkflowStep icon={<Package size={18}/>} title="1. Supplier" text="Enter real bundle COGS by supplier currency." />
+      <WorkflowStep icon={<Store size={18}/>} title="2. Market" text="Set selling currency and payout currency." />
+      <WorkflowStep icon={<CreditCard size={18}/>} title="3. Payments" text="Add processors, fixed fees, and FX fee." />
+      <WorkflowStep icon={<Calculator size={18}/>} title="4. Price" text="Apply SRP presets or suggested prices." />
+    </section>
+
+    <section className="panel instruction-panel">
+      <div className="section-head wrap">
+        <PanelTitle title="How to use this" subtitle="Use this as a decision tool before launching or scaling a product." />
+      </div>
+      <div className="instruction-grid">
+        <Instruction icon={<CheckCircle2 size={17}/>} title="Start with SRP" text="Use your default market prices first, then check BEROAS and CPP." />
+        <Instruction icon={<Lightbulb size={17}/>} title="BEROAS meaning" text="BEROAS is the minimum Meta ROAS needed to break even after fees, COGS, and OpEx." />
+        <Instruction icon={<AlertTriangle size={17}/>} title="When to be careful" text="If BEROAS is high, the test needs a stronger offer, higher price, lower COGS, or better bundle strategy." />
+      </div>
     </section>
 
     <section className="grid dashboard-grid">
@@ -305,6 +370,22 @@ function App() {
             </tbody>
           </table>
         </div>
+      </div>
+    </section>
+
+    <section className="panel wide preset-panel">
+      <div className="section-head wrap">
+        <PanelTitle title={`SRP presets for ${market?.selling_currency || 'selling currency'}`} subtitle="Manage default selling prices by currency. Add or edit presets here, not in code." />
+        <button onClick={addPricePreset}><Plus size={16}/> Add SRP preset</button>
+      </div>
+      <div className="preset-list">
+        {matchingPricePresets.length ? matchingPricePresets.map(preset => <div className="preset-row" key={preset.id}>
+          <input value={preset.name} onChange={e => updatePricePreset(preset.id, { name: e.target.value })} />
+          <select value={preset.currency} onChange={e => updatePricePreset(preset.id, { currency: e.target.value })}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select>
+          {[1,2,3,4,5].map(q => <input key={q} type="number" step="0.01" value={preset.prices?.[q] ?? ''} placeholder={`${q}x`} onChange={e => updatePricePreset(preset.id, { prices: { ...(preset.prices || {}), [q]: Number(e.target.value) } })} />)}
+          <button className="secondary small" onClick={() => applyPricePreset(preset)}>Use SRP</button>
+          <IconButton onClick={() => removePricePreset(preset.id)} />
+        </div>) : <p className="empty-text">No SRP preset for this selling currency yet. Click Add SRP preset to create one.</p>}
       </div>
     </section>
 
@@ -386,9 +467,21 @@ function App() {
         </table>
       </div>
     </section>
+
+    <section className="panel wide recommendation-panel">
+      <PanelTitle title="Launch recommendation" subtitle="Read this after setting your SRP or suggested prices." />
+      <div className="recommendation-grid">
+        {recommendations.map(item => <div key={item.qty} className={`recommendation-card ${item.level}`}>
+          <div className="recommendation-top"><strong>{item.qty}x</strong><span>{item.label}</span></div>
+          <p>{item.text}</p>
+          <small>BEROAS: {num(item.ber)} | Break-even CPP: {money(item.breakEvenCpp, displayCurrency)}</small>
+        </div>)}
+      </div>
+    </section>
   </main>;
 }
 
+function Instruction({ icon, title, text }) { return <div className="instruction"><div className="instruction-icon">{icon}</div><div><h3>{title}</h3><p>{text}</p></div></div>; }
 function WorkflowStep({ icon, title, text }) { return <div className="workflow-step"><div className="step-icon">{icon}</div><div><h3>{title}</h3><p>{text}</p></div></div>; }
 function StatusCard({ icon, label, value, meta }) { return <div className="status-card"><div className="status-icon">{icon}</div><div><p>{label}</p><h3>{value}</h3><span>{meta}</span></div></div>; }
 function PanelTitle({ title, subtitle }) { return <div className="panel-title"><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>; }
@@ -402,5 +495,25 @@ function Result({ label, value, strong }) { return <tr className={strong ? 'stro
 function money(v, currency) { return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(Number(v || 0)); }
 function pct(v) { return `${Number(v || 0).toFixed(2)}%`; }
 function num(v) { return Number(v || 0).toFixed(2); }
+
+function buildRecommendations(rows) {
+  return rows.map(r => {
+    const ber = Number(r.ber || 0);
+    const cpp = Number(r.preAdProfit || 0);
+    if (!r.aovDisplay) {
+      return { qty: r.qty, ber, breakEvenCpp: cpp, level: 'neutral', label: 'No price yet', text: 'Add a selling price or apply an SRP preset first.' };
+    }
+    if (ber <= 1.7) {
+      return { qty: r.qty, ber, breakEvenCpp: cpp, level: 'good', label: 'Healthy test', text: 'Good room for testing. This bundle can survive a normal learning phase if the offer and creative are decent.' };
+    }
+    if (ber <= 2.2) {
+      return { qty: r.qty, ber, breakEvenCpp: cpp, level: 'ok', label: 'Workable', text: 'Still testable, but watch CPP early. You need cleaner targeting, stronger hooks, or better bundle positioning.' };
+    }
+    if (ber <= 3.0) {
+      return { qty: r.qty, ber, breakEvenCpp: cpp, level: 'warn', label: 'Tight economics', text: 'Risky for cold testing. Improve price, COGS, fees, or push this bundle only as an upsell or warmer offer.' };
+    }
+    return { qty: r.qty, ber, breakEvenCpp: cpp, level: 'bad', label: 'Hard to test', text: 'BEROAS is too high for a normal cold test. Fix the economics before spending hard, unless you already have proven creatives.' };
+  });
+}
 
 createRoot(document.getElementById('root')).render(<App />);
