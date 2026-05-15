@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Plus, Trash2, Save, RefreshCcw, LogOut, Database, Store, CreditCard, Package, Calculator, FolderOpen, Lightbulb, AlertTriangle, CheckCircle2, Settings } from 'lucide-react';
 import { supabase, hasSupabase } from './lib/supabase';
@@ -54,7 +54,8 @@ function App() {
   const [rows, setRows] = useState([]);
   const [suggestedPrices, setSuggestedPrices] = useState([]);
   const [busy, setBusy] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState('calculator');
+  const autoSrpAppliedRef = useRef('');
   const [recommendationRules, setRecommendationRules] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('ber_recommendation_rules')) || DEFAULT_STATUS_RULES;
@@ -81,7 +82,26 @@ function App() {
   const market = useMemo(() => markets.find(m => m.id === selectedMarketId), [markets, selectedMarketId]);
   const activeProcessorCount = processors.filter(p => p.active).length;
   const matchingPricePresets = useMemo(() => pricePresets.filter(p => p.currency === (market?.selling_currency || 'GBP')), [pricePresets, market]);
+  const defaultPricePreset = useMemo(() => matchingPricePresets[0], [matchingPricePresets]);
   const recommendations = useMemo(() => buildRecommendations(rows, recommendationRules), [rows, recommendationRules]);
+
+
+  useEffect(() => {
+    if (!market?.selling_currency || !defaultPricePreset) return;
+    const signature = `${market.id || 'market'}:${market.selling_currency}:${defaultPricePreset.id}`;
+    if (autoSrpAppliedRef.current === signature) return;
+    autoSrpAppliedRef.current = signature;
+    setBundleOverrides(prev => {
+      const next = { ...prev };
+      for (let qty = 1; qty <= 5; qty++) {
+        const current = next[qty]?.aov;
+        const presetPrice = defaultPricePreset.prices?.[qty];
+        if (presetPrice === undefined || presetPrice === null || presetPrice === '') continue;
+        next[qty] = { ...(next[qty] || {}), aov: String(presetPrice) };
+      }
+      return next;
+    });
+  }, [market?.id, market?.selling_currency, defaultPricePreset?.id]);
 
   useEffect(() => {
     let active = true;
@@ -356,7 +376,8 @@ function App() {
         <p>Build reusable supplier, market, and processor profiles. Then create pricing scenarios without changing code.</p>
       </div>
       <div className="top-actions">
-        <button className="secondary" onClick={() => setSettingsOpen(!settingsOpen)}><Settings size={16}/> {settingsOpen ? 'Close settings' : 'Settings'}</button>
+        <button className={activeTab === 'calculator' ? '' : 'secondary'} onClick={() => setActiveTab('calculator')}><Calculator size={16}/> Calculator</button>
+        <button className={activeTab === 'settings' ? '' : 'secondary'} onClick={() => setActiveTab('settings')}><Settings size={16}/> Settings</button>
         <button className="secondary" onClick={loadData}><RefreshCcw size={16}/> Refresh</button>
         {hasSupabase && <button className="secondary" onClick={() => supabase.auth.signOut()}><LogOut size={16}/> Sign out</button>}
       </div>
@@ -365,22 +386,22 @@ function App() {
     {message && <div className="notice">{message}</div>}
     {!hasSupabase && <div className="notice">Local mode: add Supabase env vars in Vercel to save data in the cloud.</div>}
 
-    <section className="workspace-bar panel">
+    {activeTab === 'calculator' && <section className="workspace-bar panel">
       <div>
         <div className="eyebrow">Current setup</div>
         <h2>{scenarioName}</h2>
         <p>{supplier?.name || 'No supplier'} · {market?.name || 'No market'} · {activeProcessorCount} active processor{activeProcessorCount === 1 ? '' : 's'} · Results in {displayCurrency}</p>
       </div>
       <div className="workspace-actions">
-        <button onClick={() => setSettingsOpen(!settingsOpen)}><Settings size={16}/> {settingsOpen ? 'Hide settings' : 'Open settings'}</button>
+        <button onClick={() => setActiveTab('settings')}><Settings size={16}/> Settings</button>
         <button className="secondary" onClick={saveScenario}><Save size={16}/> Save scenario</button>
       </div>
-    </section>
+    </section>}
 
-    {settingsOpen && <section className="settings-center panel wide">
+    {activeTab === 'settings' && <section className="settings-center panel wide">
       <div className="section-head wrap">
-        <PanelTitle title="Settings" subtitle="Manage suppliers, markets, payment processors, SRP presets, and BEROAS status rules here. The calculator below stays clean." />
-        <button className="secondary small" onClick={() => setSettingsOpen(false)}>Done</button>
+        <PanelTitle title="Settings" subtitle="Manage suppliers, markets, payment processors, SRP presets, and BEROAS status rules here. The calculator lives on its own tab." />
+        <button className="secondary small" onClick={() => setActiveTab('calculator')}>Back to calculator</button>
       </div>
 
       <div className="settings-grid">
@@ -463,6 +484,7 @@ function App() {
       </div>
     </section>}
 
+    {activeTab === 'calculator' && <>
     <section className="grid setup-grid">
       <div className="panel scenario-panel">
         <PanelTitle title="Scenario setup" subtitle="This is the saved preset you will reload later." />
@@ -499,8 +521,9 @@ function App() {
 
     <section className="panel wide suggestion-panel">
       <div className="section-head wrap">
-        <PanelTitle title={`Suggested prices in ${market?.selling_currency || 'selling currency'}`} subtitle="Prices are calculated from COGS, active processor fees, FX fee, and OpEx. Choose a target to fill the selling price row." />
+        <PanelTitle title={`Suggested prices in ${market?.selling_currency || 'selling currency'}`} subtitle="Default SRP is applied automatically from Settings. Use these buttons only when you want economics-based pricing instead." />
         <div className="button-row">
+          {defaultPricePreset && <button className="secondary" onClick={() => applyPricePreset(defaultPricePreset)}>Use default SRP</button>}
           {SUGGESTED_MARGINS.map(m => <button key={m} onClick={() => applySuggestedPrices(m)}>{m === 0 ? 'Use break-even' : `Use ${Math.round(m*100)}%`}</button>)}
         </div>
       </div>
@@ -545,7 +568,7 @@ function App() {
     <section className="panel wide recommendation-panel">
       <div className="section-head wrap">
         <PanelTitle title="Launch recommendation" subtitle="Based on your saved BEROAS status rules. Edit rules inside Settings." />
-        <button className="secondary small" onClick={() => setSettingsOpen(true)}><Settings size={16}/> Edit rules</button>
+        <button className="secondary small" onClick={() => setActiveTab('settings')}><Settings size={16}/> Edit rules</button>
       </div>
       <div className="recommendation-grid">
         {recommendations.map(item => <div key={item.qty} className={`recommendation-card ${item.level}`}>
@@ -555,6 +578,7 @@ function App() {
         </div>)}
       </div>
     </section>
+    </>}
   </main>;
 }
 
