@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Plus, Trash2, Save, RefreshCcw, LogOut, Database, Store, CreditCard, Package, Calculator, FolderOpen, Lightbulb, AlertTriangle, CheckCircle2, Settings } from 'lucide-react';
+import { Plus, Trash2, Save, RefreshCcw, LogOut, Database, Store, CreditCard, Package, Calculator, FolderOpen, Lightbulb, AlertTriangle, CheckCircle2, Settings, TrendingUp, ShoppingCart } from 'lucide-react';
 import { supabase, hasSupabase } from './lib/supabase';
-import { calculateRows, calculateSuggestedPrices, TARGET_MARGINS, SUGGESTED_MARGINS } from './lib/calc';
+import { calculateRows, calculateSuggestedPrices, calculateUpsell, calculateAbandoned, TARGET_MARGINS, SUGGESTED_MARGINS } from './lib/calc';
 import './styles.css';
 
 const CURRENCIES = ['USD', 'GBP', 'EUR', 'HKD', 'CAD', 'AUD', 'CHF', 'SEK', 'NOK', 'DKK', 'MXN', 'ILS', 'JPY'];
@@ -21,6 +21,22 @@ const RECOMMENDATION_LEVELS = [
   { value: 'bad', label: 'Red' },
   { value: 'neutral', label: 'Grey' }
 ];
+
+const DEFAULT_UPSELL_OFFERS = [
+  { id: 'upsell-3x', label: '3x upsell', qty: 3, price: 29.95, srp: 44.95 },
+  { id: 'upsell-1x', label: '1x downsell', qty: 1, price: 12.95, srp: 24.95 }
+];
+
+const DEFAULT_DISCOUNT_TIERS = [10, 15];
+
+function loadStored(key, fallback) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key));
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 const seed = {
   suppliers: [{ id: 'local-supplier-1', name: 'Default Supplier', cost_per_unit: 9.25, currency: 'USD', local: true }],
@@ -53,6 +69,10 @@ function App() {
   const [bundleOverrides, setBundleOverrides] = useState({});
   const [rows, setRows] = useState([]);
   const [suggestedPrices, setSuggestedPrices] = useState([]);
+  const [upsellOffers, setUpsellOffers] = useState(() => loadStored('ber_upsell_offers', DEFAULT_UPSELL_OFFERS));
+  const [discountTiers, setDiscountTiers] = useState(() => loadStored('ber_abandoned_tiers', DEFAULT_DISCOUNT_TIERS));
+  const [upsellRows, setUpsellRows] = useState([]);
+  const [abandonedRows, setAbandonedRows] = useState([]);
   const [busy, setBusy] = useState(false);
   const [activeTab, setActiveTab] = useState('calculator');
   const autoSrpAppliedRef = useRef('');
@@ -118,6 +138,22 @@ function App() {
       .catch(err => setMessage(err.message));
     return () => { active = false; };
   }, [supplier, market, processors, displayCurrency, opexPercent, bundleOverrides]);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      calculateUpsell({ supplier, market, processors, bundleOverrides, offers: upsellOffers }),
+      calculateAbandoned({ supplier, market, processors, bundleOverrides, discountTiers })
+    ])
+      .then(([upsell, abandoned]) => {
+        if (active) {
+          setUpsellRows(upsell);
+          setAbandonedRows(abandoned);
+        }
+      })
+      .catch(err => setMessage(err.message));
+    return () => { active = false; };
+  }, [supplier, market, processors, bundleOverrides, upsellOffers, discountTiers]);
 
   async function handleAuth(e) {
     e.preventDefault();
@@ -339,6 +375,42 @@ function App() {
     saveRecommendationRules(DEFAULT_STATUS_RULES);
   }
 
+  function saveUpsellOffers(next) {
+    setUpsellOffers(next);
+    localStorage.setItem('ber_upsell_offers', JSON.stringify(next));
+  }
+
+  function addUpsellOffer() {
+    saveUpsellOffers([...upsellOffers, { id: crypto.randomUUID(), label: 'New offer', qty: 1, price: 0, srp: 0 }]);
+  }
+
+  function updateUpsellOffer(id, patch) {
+    saveUpsellOffers(upsellOffers.map(o => o.id === id ? { ...o, ...patch } : o));
+  }
+
+  function removeUpsellOffer(id) {
+    const next = upsellOffers.filter(o => o.id !== id);
+    saveUpsellOffers(next.length ? next : DEFAULT_UPSELL_OFFERS);
+  }
+
+  function saveDiscountTiers(next) {
+    setDiscountTiers(next);
+    localStorage.setItem('ber_abandoned_tiers', JSON.stringify(next));
+  }
+
+  function addDiscountTier() {
+    saveDiscountTiers([...discountTiers, 20]);
+  }
+
+  function updateDiscountTier(index, value) {
+    saveDiscountTiers(discountTiers.map((d, i) => i === index ? value : d));
+  }
+
+  function removeDiscountTier(index) {
+    const next = discountTiers.filter((_, i) => i !== index);
+    saveDiscountTiers(next.length ? next : [10]);
+  }
+
   function applySuggestedPrices(margin) {
     setBundleOverrides(prev => {
       const next = { ...prev };
@@ -376,7 +448,9 @@ function App() {
         <p>Build reusable supplier, market, and processor profiles. Then create pricing scenarios without changing code.</p>
       </div>
       <div className="top-actions">
-        <button className={activeTab === 'calculator' ? '' : 'secondary'} onClick={() => setActiveTab('calculator')}><Calculator size={16}/> Calculator</button>
+        <button className={activeTab === 'calculator' ? '' : 'secondary'} onClick={() => setActiveTab('calculator')}><Calculator size={16}/> BER</button>
+        <button className={activeTab === 'upsell' ? '' : 'secondary'} onClick={() => setActiveTab('upsell')}><TrendingUp size={16}/> Upsell</button>
+        <button className={activeTab === 'abandoned' ? '' : 'secondary'} onClick={() => setActiveTab('abandoned')}><ShoppingCart size={16}/> Abandoned checkout</button>
         <button className={activeTab === 'settings' ? '' : 'secondary'} onClick={() => setActiveTab('settings')}><Settings size={16}/> Settings</button>
         <button className="secondary" onClick={loadData}><RefreshCcw size={16}/> Refresh</button>
         {hasSupabase && <button className="secondary" onClick={() => supabase.auth.signOut()}><LogOut size={16}/> Sign out</button>}
@@ -483,6 +557,97 @@ function App() {
         </div>
       </div>
     </section>}
+
+    {activeTab === 'upsell' && <>
+    <section className="panel wide">
+      <div className="section-head wrap">
+        <PanelTitle title="Post-purchase upsells" subtitle="These run on an order you already won, so there is no ad cost. The only test is whether the offer clears variable cost. Tiered COGS is pulled automatically from your bundle setup, and the discount is framed against the SRP anchor." />
+        <button onClick={addUpsellOffer}><Plus size={16}/> Add offer</button>
+      </div>
+      <div className="offer-editor">
+        <div className="offer-editor-header">
+          <span>Offer name</span><span>Qty tier</span><span>Upsell price ({market?.selling_currency || 'GBP'})</span><span>SRP anchor ({market?.selling_currency || 'GBP'})</span><span></span>
+        </div>
+        {upsellOffers.map(o => <div className="offer-editor-row" key={o.id}>
+          <input value={o.label} onChange={e => updateUpsellOffer(o.id, { label: e.target.value })} />
+          <select value={o.qty} onChange={e => updateUpsellOffer(o.id, { qty: Number(e.target.value) })}>{[1,2,3,4,5].map(q => <option key={q} value={q}>{q}x</option>)}</select>
+          <input type="number" step="0.01" value={o.price} onChange={e => updateUpsellOffer(o.id, { price: Number(e.target.value) })} />
+          <input type="number" step="0.01" value={o.srp} onChange={e => updateUpsellOffer(o.id, { srp: Number(e.target.value) })} />
+          <IconButton onClick={() => removeUpsellOffer(o.id)} />
+        </div>)}
+      </div>
+    </section>
+
+    <section className="panel wide">
+      <PanelTitle title={`Upsell economics in ${market?.selling_currency || 'GBP'}`} subtitle="Net profit and margin are after tiered COGS and processor fees, with no ad cost applied. Green means the add-on order makes money on its own." />
+      <div className="recommendation-grid offer-grid">
+        {upsellRows.map(r => {
+          const level = r.netProfit > 0 ? 'good' : (r.netProfit < 0 ? 'bad' : 'neutral');
+          const cur = market?.selling_currency || 'GBP';
+          return <div className={`recommendation-card ${level}`} key={r.id}>
+            <div className="recommendation-top"><strong>{r.label}</strong><span>{r.qty}x</span></div>
+            <div className="offer-headline">{pct(r.discountPct)} off SRP</div>
+            <div className="offer-stats">
+              <div><span>Upsell price</span><b>{money(r.price, cur)}</b></div>
+              <div><span>SRP anchor</span><b>{money(r.srp, cur)}</b></div>
+              <div><span>Tiered COGS</span><b>-{money(r.cogsSelling, cur)}</b></div>
+              <div><span>Processor fee</span><b>-{money(r.fee, cur)}</b></div>
+              <div className="offer-net"><span>Net profit</span><b>{money(r.netProfit, cur)}</b></div>
+              <div><span>Net margin</span><b>{pct(r.margin)}</b></div>
+            </div>
+            <small>{r.netProfit > 0 ? `Clears variable cost with ${money(r.netProfit, cur)} to spare.` : (r.netProfit < 0 ? `Sells at a loss of ${money(Math.abs(r.netProfit), cur)} per take.` : 'Breaks even exactly.')}</small>
+          </div>;
+        })}
+      </div>
+    </section>
+    </>}
+
+    {activeTab === 'abandoned' && <>
+    <section className="panel wide">
+      <div className="section-head wrap">
+        <PanelTitle title="Abandoned checkout recovery" subtitle="The ad spend that brought this shopper in is already gone, so it is not counted here. Recovery is incremental, and the only floor is variable cost (COGS plus fees), not your full break-even. OpEx is excluded for the same reason. Set the discount steps you plan to send in the flow." />
+        <button onClick={addDiscountTier}><Plus size={16}/> Add discount step</button>
+      </div>
+      <div className="tier-editor">
+        {discountTiers.map((d, i) => <div className="tier-chip" key={i}>
+          <input type="number" step="1" value={d} onChange={e => updateDiscountTier(i, Number(e.target.value))} />
+          <span>% off</span>
+          <button className="tier-remove" onClick={() => removeDiscountTier(i)} title="Remove">×</button>
+        </div>)}
+      </div>
+    </section>
+
+    <section className="panel wide">
+      <PanelTitle title={`Discount room by bundle in ${market?.selling_currency || 'GBP'}`} subtitle="Contribution is the full-price profit with no discount. Break-even discount is the absolute ceiling before a recovered order loses money. Your live 1x and 3x offers are highlighted." />
+      <div className="table-card">
+        <table className="calc-table">
+          <thead><tr><th>Bundle</th><th>Order value</th><th>Contribution</th><th>Break-even discount</th>{discountTiers.map((d, i) => <th key={i}>{d}% off</th>)}</tr></thead>
+          <tbody>
+            {abandonedRows.map(r => {
+              const cur = market?.selling_currency || 'GBP';
+              return <tr key={r.qty} className={(r.qty === 1 || r.qty === 3) ? 'live-row' : ''}>
+                <td>{r.qty}x{(r.qty === 1 || r.qty === 3) && <span className="live-pill">live</span>}</td>
+                <td>{money(r.aov, cur)}</td>
+                <td>{r.aov > 0 ? money(r.contribution, cur) : '—'}</td>
+                <td>{r.aov > 0 ? pct(Math.max(0, r.breakEvenDiscount)) : '—'}</td>
+                {r.tiers.map((t, i) => <td key={i} className={r.aov > 0 ? (t.profit >= 0 ? 'pos' : 'neg') : ''}>{r.aov > 0 ? money(t.profit, cur) : '—'}</td>)}
+              </tr>;
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section className="panel wide">
+      <PanelTitle title="Suggested flow cadence" subtitle="Timing is measured from the moment of abandonment. Lead with a plain reminder, sell trust before price, and only introduce a discount once they have ignored the first nudges." />
+      <div className="flow-grid">
+        <div className="flow-step"><div className="flow-num">1</div><div><h3>1 hour · no discount</h3><p>Simple reminder. Show the product, keep it warm.</p></div></div>
+        <div className="flow-step"><div className="flow-num">2</div><div><h3>12 hours · no discount</h3><p>Handle objections. Reviews, guarantee, results.</p></div></div>
+        <div className="flow-step"><div className="flow-num">3</div><div><h3>24 hours · first discount</h3><p>Introduce the smaller code with light urgency.</p></div></div>
+        <div className="flow-step"><div className="flow-num">4</div><div><h3>48 hours · final discount</h3><p>Last chance. Code expiring, gentle scarcity.</p></div></div>
+      </div>
+    </section>
+    </>}
 
     {activeTab === 'calculator' && <>
     <section className="grid setup-grid">

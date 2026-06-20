@@ -148,3 +148,97 @@ function roundToCents(value) {
   if (!Number.isFinite(value) || value < 0) return 0;
   return Math.round(value * 100) / 100;
 }
+
+export async function calculateUpsell({ supplier, market, processors, bundleOverrides, offers }) {
+  if (!supplier || !market || !Array.isArray(offers)) return [];
+
+  const activeProcessors = processors.filter(p => p.active);
+  const feeProfile = await averageProcessorFeeProfile({
+    processors: activeProcessors,
+    sellingCurrency: market.selling_currency,
+    payoutCurrency: market.payout_currency
+  });
+
+  const output = [];
+
+  for (const offer of offers) {
+    const qty = Math.max(1, Number(offer.qty) || 1);
+    const price = Number(offer.price) || 0;
+    const srp = Number(offer.srp) || 0;
+    const override = bundleOverrides?.[qty] || {};
+    const cogsInput = numberOrDefault(override.cogs, Number(supplier.cost_per_unit || 0) * qty);
+    const cogsSelling = await convertCurrency(cogsInput, supplier.currency, market.selling_currency);
+
+    const fee = price * feeProfile.variableRate + feeProfile.fixedFeeSelling;
+    const netProfit = price - cogsSelling - fee;
+    const margin = price > 0 ? (netProfit / price) * 100 : 0;
+    const discountPct = srp > 0 ? ((srp - price) / srp) * 100 : 0;
+
+    output.push({
+      id: offer.id,
+      label: offer.label || `${qty}x offer`,
+      qty,
+      price,
+      srp,
+      cogsSelling,
+      fee,
+      netProfit,
+      margin,
+      discountPct
+    });
+  }
+
+  return output;
+}
+
+export async function calculateAbandoned({ supplier, market, processors, bundleOverrides, discountTiers }) {
+  if (!supplier || !market) return [];
+
+  const activeProcessors = processors.filter(p => p.active);
+  const feeProfile = await averageProcessorFeeProfile({
+    processors: activeProcessors,
+    sellingCurrency: market.selling_currency,
+    payoutCurrency: market.payout_currency
+  });
+
+  const variableRate = feeProfile.variableRate;
+  const fixedFee = feeProfile.fixedFeeSelling;
+  const tiers = Array.isArray(discountTiers) ? discountTiers : [];
+  const output = [];
+
+  for (let qty = 1; qty <= 5; qty++) {
+    const override = bundleOverrides?.[qty] || {};
+    const aov = numberOrDefault(override.aov, 0);
+    const cogsInput = numberOrDefault(override.cogs, Number(supplier.cost_per_unit || 0) * qty);
+    const cogsSelling = await convertCurrency(cogsInput, supplier.currency, market.selling_currency);
+
+    const feeFull = aov * variableRate + fixedFee;
+    const contribution = aov - cogsSelling - feeFull;
+    const contributionPct = aov > 0 ? (contribution / aov) * 100 : 0;
+
+    const breakEvenRevenue = (1 - variableRate) > 0 ? (cogsSelling + fixedFee) / (1 - variableRate) : 0;
+    const breakEvenDiscount = aov > 0 ? (1 - breakEvenRevenue / aov) * 100 : 0;
+
+    const tierResults = tiers.map(d => {
+      const discount = Number(d) || 0;
+      const revenue = aov * (1 - discount / 100);
+      const fee = revenue * variableRate + fixedFee;
+      const profit = revenue - cogsSelling - fee;
+      const marginPct = revenue > 0 ? (profit / revenue) * 100 : 0;
+      return { discount, revenue, profit, marginPct };
+    });
+
+    output.push({
+      qty,
+      aov,
+      cogsSelling,
+      feeFull,
+      contribution,
+      contributionPct,
+      breakEvenDiscount,
+      tiers: tierResults
+    });
+  }
+
+  return output;
+}
