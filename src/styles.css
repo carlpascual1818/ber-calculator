@@ -416,3 +416,7 @@ button.small {
 @media (max-width:720px) {
   .flow-grid { grid-template-columns:1fr; }
 }
+
+.head-controls { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
+.head-controls .compact-field { min-width:150px; }
+@media (max-width:720px) { .head-controls { width:100%; } .head-controls .compact-field { flex:1; } }

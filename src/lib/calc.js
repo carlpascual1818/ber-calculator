@@ -1,4 +1,4 @@
-import { convertCurrency } from './fx';
+import { convertCurrency, getLatestRate } from './fx';
 
 export const TARGET_MARGINS = [0.10, 0.15, 0.20, 0.30, 0.40];
 export const SUGGESTED_MARGINS = [0, 0.10, 0.15, 0.20, 0.30, 0.40];
@@ -149,7 +149,7 @@ function roundToCents(value) {
   return Math.round(value * 100) / 100;
 }
 
-export async function calculateUpsell({ supplier, market, processors, bundleOverrides, offers }) {
+export async function calculateUpsell({ supplier, market, processors, displayCurrency, bundleOverrides, offers }) {
   if (!supplier || !market || !Array.isArray(offers)) return [];
 
   const activeProcessors = processors.filter(p => p.active);
@@ -159,28 +159,34 @@ export async function calculateUpsell({ supplier, market, processors, bundleOver
     payoutCurrency: market.payout_currency
   });
 
+  const displayCur = displayCurrency || market.selling_currency;
+  const sellingToDisplay = await getLatestRate(market.selling_currency, displayCur);
+  const fixedFeeDisplay = feeProfile.fixedFeeSelling * sellingToDisplay;
   const output = [];
 
   for (const offer of offers) {
     const qty = Math.max(1, Number(offer.qty) || 1);
-    const price = Number(offer.price) || 0;
-    const srp = Number(offer.srp) || 0;
+    const priceSelling = Number(offer.price) || 0;
+    const srpSelling = Number(offer.srp) || 0;
     const override = bundleOverrides?.[qty] || {};
     const cogsInput = numberOrDefault(override.cogs, Number(supplier.cost_per_unit || 0) * qty);
-    const cogsSelling = await convertCurrency(cogsInput, supplier.currency, market.selling_currency);
+    const cogsDisplay = await convertCurrency(cogsInput, supplier.currency, displayCur);
 
-    const fee = price * feeProfile.variableRate + feeProfile.fixedFeeSelling;
-    const netProfit = price - cogsSelling - fee;
+    const price = priceSelling * sellingToDisplay;
+    const srp = srpSelling * sellingToDisplay;
+    const fee = price * feeProfile.variableRate + fixedFeeDisplay;
+    const netProfit = price - cogsDisplay - fee;
     const margin = price > 0 ? (netProfit / price) * 100 : 0;
-    const discountPct = srp > 0 ? ((srp - price) / srp) * 100 : 0;
+    const discountPct = srpSelling > 0 ? ((srpSelling - priceSelling) / srpSelling) * 100 : 0;
 
     output.push({
       id: offer.id,
       label: offer.label || `${qty}x offer`,
       qty,
+      currency: displayCur,
       price,
       srp,
-      cogsSelling,
+      cogsSelling: cogsDisplay,
       fee,
       netProfit,
       margin,
@@ -191,7 +197,7 @@ export async function calculateUpsell({ supplier, market, processors, bundleOver
   return output;
 }
 
-export async function calculateAbandoned({ supplier, market, processors, bundleOverrides, discountTiers }) {
+export async function calculateAbandoned({ supplier, market, processors, displayCurrency, bundleOverrides, discountTiers }) {
   if (!supplier || !market) return [];
 
   const activeProcessors = processors.filter(p => p.active);
@@ -202,36 +208,39 @@ export async function calculateAbandoned({ supplier, market, processors, bundleO
   });
 
   const variableRate = feeProfile.variableRate;
-  const fixedFee = feeProfile.fixedFeeSelling;
+  const displayCur = displayCurrency || market.selling_currency;
+  const sellingToDisplay = await getLatestRate(market.selling_currency, displayCur);
+  const fixedFee = feeProfile.fixedFeeSelling * sellingToDisplay;
   const tiers = Array.isArray(discountTiers) ? discountTiers : [];
   const output = [];
 
   for (let qty = 1; qty <= 5; qty++) {
     const override = bundleOverrides?.[qty] || {};
-    const aov = numberOrDefault(override.aov, 0);
+    const aov = numberOrDefault(override.aov, 0) * sellingToDisplay;
     const cogsInput = numberOrDefault(override.cogs, Number(supplier.cost_per_unit || 0) * qty);
-    const cogsSelling = await convertCurrency(cogsInput, supplier.currency, market.selling_currency);
+    const cogsDisplay = await convertCurrency(cogsInput, supplier.currency, displayCur);
 
     const feeFull = aov * variableRate + fixedFee;
-    const contribution = aov - cogsSelling - feeFull;
+    const contribution = aov - cogsDisplay - feeFull;
     const contributionPct = aov > 0 ? (contribution / aov) * 100 : 0;
 
-    const breakEvenRevenue = (1 - variableRate) > 0 ? (cogsSelling + fixedFee) / (1 - variableRate) : 0;
+    const breakEvenRevenue = (1 - variableRate) > 0 ? (cogsDisplay + fixedFee) / (1 - variableRate) : 0;
     const breakEvenDiscount = aov > 0 ? (1 - breakEvenRevenue / aov) * 100 : 0;
 
     const tierResults = tiers.map(d => {
       const discount = Number(d) || 0;
       const revenue = aov * (1 - discount / 100);
       const fee = revenue * variableRate + fixedFee;
-      const profit = revenue - cogsSelling - fee;
+      const profit = revenue - cogsDisplay - fee;
       const marginPct = revenue > 0 ? (profit / revenue) * 100 : 0;
       return { discount, revenue, profit, marginPct };
     });
 
     output.push({
       qty,
+      currency: displayCur,
       aov,
-      cogsSelling,
+      cogsSelling: cogsDisplay,
       feeFull,
       contribution,
       contributionPct,

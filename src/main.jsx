@@ -142,8 +142,8 @@ function App() {
   useEffect(() => {
     let active = true;
     Promise.all([
-      calculateUpsell({ supplier, market, processors, bundleOverrides, offers: upsellOffers }),
-      calculateAbandoned({ supplier, market, processors, bundleOverrides, discountTiers })
+      calculateUpsell({ supplier, market, processors, displayCurrency, bundleOverrides, offers: upsellOffers }),
+      calculateAbandoned({ supplier, market, processors, displayCurrency, bundleOverrides, discountTiers })
     ])
       .then(([upsell, abandoned]) => {
         if (active) {
@@ -153,7 +153,7 @@ function App() {
       })
       .catch(err => setMessage(err.message));
     return () => { active = false; };
-  }, [supplier, market, processors, bundleOverrides, upsellOffers, discountTiers]);
+  }, [supplier, market, processors, displayCurrency, bundleOverrides, upsellOffers, discountTiers]);
 
   async function handleAuth(e) {
     e.preventDefault();
@@ -561,8 +561,11 @@ function App() {
     {activeTab === 'upsell' && <>
     <section className="panel wide">
       <div className="section-head wrap">
-        <PanelTitle title="Post-purchase upsells" subtitle="These run on an order you already won, so there is no ad cost. The only test is whether the offer clears variable cost. Tiered COGS is pulled automatically from your bundle setup, and the discount is framed against the SRP anchor." />
-        <button onClick={addUpsellOffer}><Plus size={16}/> Add offer</button>
+        <PanelTitle title="Post-purchase upsells" subtitle="These run on an order you already won, so there is no ad cost. The only test is whether the offer clears variable cost. Change the quantity per offer with the Qty tier dropdown. Tiered COGS is pulled from the Bundle COGS row on the BER tab, so set your real per-tier supplier costs there to make 1x, 2x and 3x diverge." />
+        <div className="head-controls">
+          <Field label="Results currency" compact><select value={displayCurrency} onChange={e => setDisplayCurrency(e.target.value)}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select></Field>
+          <button onClick={addUpsellOffer}><Plus size={16}/> Add offer</button>
+        </div>
       </div>
       <div className="offer-editor">
         <div className="offer-editor-header">
@@ -579,11 +582,11 @@ function App() {
     </section>
 
     <section className="panel wide">
-      <PanelTitle title={`Upsell economics in ${market?.selling_currency || 'GBP'}`} subtitle="Net profit and margin are after tiered COGS and processor fees, with no ad cost applied. Green means the add-on order makes money on its own." />
+      <PanelTitle title={`Upsell economics in ${displayCurrency}`} subtitle="Prices and SRP anchors are entered in your selling currency and converted to the results currency here, same as the BER tab. Net profit and margin are after tiered COGS and processor fees, with no ad cost applied." />
       <div className="recommendation-grid offer-grid">
         {upsellRows.map(r => {
           const level = r.netProfit > 0 ? 'good' : (r.netProfit < 0 ? 'bad' : 'neutral');
-          const cur = market?.selling_currency || 'GBP';
+          const cur = r.currency || displayCurrency;
           return <div className={`recommendation-card ${level}`} key={r.id}>
             <div className="recommendation-top"><strong>{r.label}</strong><span>{r.qty}x</span></div>
             <div className="offer-headline">{pct(r.discountPct)} off SRP</div>
@@ -606,7 +609,10 @@ function App() {
     <section className="panel wide">
       <div className="section-head wrap">
         <PanelTitle title="Abandoned checkout recovery" subtitle="The ad spend that brought this shopper in is already gone, so it is not counted here. Recovery is incremental, and the only floor is variable cost (COGS plus fees), not your full break-even. OpEx is excluded for the same reason. Set the discount steps you plan to send in the flow." />
-        <button onClick={addDiscountTier}><Plus size={16}/> Add discount step</button>
+        <div className="head-controls">
+          <Field label="Results currency" compact><select value={displayCurrency} onChange={e => setDisplayCurrency(e.target.value)}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select></Field>
+          <button onClick={addDiscountTier}><Plus size={16}/> Add discount step</button>
+        </div>
       </div>
       <div className="tier-editor">
         {discountTiers.map((d, i) => <div className="tier-chip" key={i}>
@@ -618,13 +624,13 @@ function App() {
     </section>
 
     <section className="panel wide">
-      <PanelTitle title={`Discount room by bundle in ${market?.selling_currency || 'GBP'}`} subtitle="Contribution is the full-price profit with no discount. Break-even discount is the absolute ceiling before a recovered order loses money. Your live 1x and 3x offers are highlighted." />
+      <PanelTitle title={`Discount room by bundle in ${displayCurrency}`} subtitle="Order values come from the Bundle pricing on the BER tab and are converted to the results currency here. Contribution is full-price profit with no discount. Break-even discount is the ceiling before a recovered order loses money. Your live 1x and 3x offers are highlighted." />
       <div className="table-card">
         <table className="calc-table">
           <thead><tr><th>Bundle</th><th>Order value</th><th>Contribution</th><th>Break-even discount</th>{discountTiers.map((d, i) => <th key={i}>{d}% off</th>)}</tr></thead>
           <tbody>
             {abandonedRows.map(r => {
-              const cur = market?.selling_currency || 'GBP';
+              const cur = r.currency || displayCurrency;
               return <tr key={r.qty} className={(r.qty === 1 || r.qty === 3) ? 'live-row' : ''}>
                 <td>{r.qty}x{(r.qty === 1 || r.qty === 3) && <span className="live-pill">live</span>}</td>
                 <td>{money(r.aov, cur)}</td>
