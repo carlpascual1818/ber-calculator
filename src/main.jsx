@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Plus, Trash2, Save, RefreshCcw, LogOut, Database, Store, CreditCard, Package, Calculator, FolderOpen, Lightbulb, AlertTriangle, CheckCircle2, Settings, TrendingUp, ShoppingCart } from 'lucide-react';
 import { supabase, hasSupabase } from './lib/supabase';
-import { calculateRows, calculateSuggestedPrices, calculateUpsell, calculateAbandoned, TARGET_MARGINS, SUGGESTED_MARGINS } from './lib/calc';
+import { calculateRows, calculateSuggestedPrices, calculateUpsell, calculateAbandoned, TARGET_MARGINS, SUGGESTED_MARGINS, BUNDLE_MODES } from './lib/calc';
 import './styles.css';
 
 const CURRENCIES = ['USD', 'GBP', 'EUR', 'HKD', 'CAD', 'AUD', 'CHF', 'SEK', 'NOK', 'DKK', 'MXN', 'ILS', 'JPY'];
@@ -67,6 +67,7 @@ function App() {
   const [opexPercent, setOpexPercent] = useState(5.5);
   const [scenarioName, setScenarioName] = useState('Default Scenario');
   const [bundleOverrides, setBundleOverrides] = useState({});
+  const [pricingMode, setPricingMode] = useState(() => loadStored('ber_pricing_mode', 'straight'));
   const [rows, setRows] = useState([]);
   const [suggestedPrices, setSuggestedPrices] = useState([]);
   const [upsellOffers, setUpsellOffers] = useState(() => loadStored('ber_upsell_offers', DEFAULT_UPSELL_OFFERS));
@@ -98,6 +99,13 @@ function App() {
     if (!hasSupabase || session) loadData();
   }, [session]);
 
+  const bundles = useMemo(() => BUNDLE_MODES[pricingMode] || BUNDLE_MODES.straight, [pricingMode]);
+
+  function changePricingMode(mode) {
+    setPricingMode(mode);
+    localStorage.setItem('ber_pricing_mode', JSON.stringify(mode));
+  }
+
   const supplier = useMemo(() => suppliers.find(s => s.id === selectedSupplierId), [suppliers, selectedSupplierId]);
   const market = useMemo(() => markets.find(m => m.id === selectedMarketId), [markets, selectedMarketId]);
   const activeProcessorCount = processors.filter(p => p.active).length;
@@ -113,21 +121,20 @@ function App() {
     autoSrpAppliedRef.current = signature;
     setBundleOverrides(prev => {
       const next = { ...prev };
-      for (let qty = 1; qty <= 5; qty++) {
-        const current = next[qty]?.aov;
-        const presetPrice = defaultPricePreset.prices?.[qty];
+      for (const b of bundles) {
+        const presetPrice = defaultPricePreset.prices?.[b.id];
         if (presetPrice === undefined || presetPrice === null || presetPrice === '') continue;
-        next[qty] = { ...(next[qty] || {}), aov: String(presetPrice) };
+        next[b.id] = { ...(next[b.id] || {}), aov: String(presetPrice) };
       }
       return next;
     });
-  }, [market?.id, market?.selling_currency, defaultPricePreset?.id]);
+  }, [market?.id, market?.selling_currency, defaultPricePreset?.id, bundles]);
 
   useEffect(() => {
     let active = true;
     Promise.all([
-      calculateRows({ supplier, market, processors, displayCurrency, opexPercent, bundleOverrides }),
-      calculateSuggestedPrices({ supplier, market, processors, opexPercent, bundleOverrides })
+      calculateRows({ supplier, market, processors, displayCurrency, opexPercent, bundleOverrides, bundles }),
+      calculateSuggestedPrices({ supplier, market, processors, opexPercent, bundleOverrides, bundles })
     ])
       .then(([resultRows, resultSuggestions]) => {
         if (active) {
@@ -137,13 +144,13 @@ function App() {
       })
       .catch(err => setMessage(err.message));
     return () => { active = false; };
-  }, [supplier, market, processors, displayCurrency, opexPercent, bundleOverrides]);
+  }, [supplier, market, processors, displayCurrency, opexPercent, bundleOverrides, bundles]);
 
   useEffect(() => {
     let active = true;
     Promise.all([
       calculateUpsell({ supplier, market, processors, displayCurrency, bundleOverrides, offers: upsellOffers }),
-      calculateAbandoned({ supplier, market, processors, displayCurrency, bundleOverrides, discountTiers })
+      calculateAbandoned({ supplier, market, processors, displayCurrency, bundleOverrides, discountTiers, bundles })
     ])
       .then(([upsell, abandoned]) => {
         if (active) {
@@ -153,7 +160,7 @@ function App() {
       })
       .catch(err => setMessage(err.message));
     return () => { active = false; };
-  }, [supplier, market, processors, displayCurrency, bundleOverrides, upsellOffers, discountTiers]);
+  }, [supplier, market, processors, displayCurrency, bundleOverrides, upsellOffers, discountTiers, bundles]);
 
   async function handleAuth(e) {
     e.preventDefault();
@@ -310,8 +317,8 @@ function App() {
   function applyPricePreset(preset) {
     setBundleOverrides(prev => {
       const next = { ...prev };
-      for (let qty = 1; qty <= 5; qty++) {
-        next[qty] = { ...(next[qty] || {}), aov: String(preset.prices?.[qty] || '') };
+      for (const b of bundles) {
+        next[b.id] = { ...(next[b.id] || {}), aov: String(preset.prices?.[b.id] || '') };
       }
       return next;
     });
@@ -417,7 +424,7 @@ function App() {
       for (const item of suggestedPrices) {
         const match = item.suggestions.find(s => s.margin === margin);
         if (!match) continue;
-        next[item.qty] = { ...(next[item.qty] || {}), aov: String(match.price) };
+        next[item.id] = { ...(next[item.id] || {}), aov: String(match.price) };
       }
       return next;
     });
@@ -525,7 +532,7 @@ function App() {
           {matchingPricePresets.length ? matchingPricePresets.map(preset => <div className="preset-row" key={preset.id}>
             <input value={preset.name} onChange={e => updatePricePreset(preset.id, { name: e.target.value })} />
             <select value={preset.currency} onChange={e => updatePricePreset(preset.id, { currency: e.target.value })}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select>
-            {[1,2,3,4,5].map(q => <input key={q} type="number" step="0.01" value={preset.prices?.[q] ?? ''} placeholder={`${q}x`} onChange={e => updatePricePreset(preset.id, { prices: { ...(preset.prices || {}), [q]: Number(e.target.value) } })} />)}
+            {bundles.map(b => <input key={b.id} type="number" step="0.01" value={preset.prices?.[b.id] ?? ''} placeholder={b.label} onChange={e => updatePricePreset(preset.id, { prices: { ...(preset.prices || {}), [b.id]: Number(e.target.value) } })} />)}
             <button className="secondary small" onClick={() => applyPricePreset(preset)}>Use SRP</button>
             <IconButton onClick={() => removePricePreset(preset.id)} />
           </div>) : <p className="empty-text">No SRP preset for this selling currency yet. Click Add SRP preset to create one.</p>}
@@ -631,8 +638,8 @@ function App() {
           <tbody>
             {abandonedRows.map(r => {
               const cur = r.currency || displayCurrency;
-              return <tr key={r.qty} className={(r.qty === 1 || r.qty === 3) ? 'live-row' : ''}>
-                <td>{r.qty}x{(r.qty === 1 || r.qty === 3) && <span className="live-pill">live</span>}</td>
+              return <tr key={r.id} className={(r.id === '1' || r.id === '3') ? 'live-row' : ''}>
+                <td>{r.label}{(r.id === '1' || r.id === '3') && <span className="live-pill">live</span>}</td>
                 <td>{money(r.aov, cur)}</td>
                 <td>{r.aov > 0 ? money(r.contribution, cur) : '—'}</td>
                 <td>{r.aov > 0 ? pct(Math.max(0, r.breakEvenDiscount)) : '—'}</td>
@@ -676,14 +683,22 @@ function App() {
       <div className="panel inputs-panel">
         <div className="section-head wrap">
           <PanelTitle title="Bundle pricing" subtitle="Enter bundle COGS, then apply or edit selling prices." />
-          <Field label="Selling price currency" compact><select value={market?.selling_currency || 'GBP'} onChange={e => updateSelectedMarketSellingCurrency(e.target.value)}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select></Field>
+          <div className="head-controls">
+            <Field label="Bundle style" compact>
+              <select value={pricingMode} onChange={e => changePricingMode(e.target.value)}>
+                <option value="straight">Straight (1x–6x)</option>
+                <option value="bundle">Offers (1x, 2+1x, 2+2x, 3+1x, 3+2x, 3+3x)</option>
+              </select>
+            </Field>
+            <Field label="Selling price currency" compact><select value={market?.selling_currency || 'GBP'} onChange={e => updateSelectedMarketSellingCurrency(e.target.value)}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select></Field>
+          </div>
         </div>
         <div className="table-card">
           <table className="input-table">
-            <thead><tr><th></th>{[1,2,3,4,5].map(q => <th key={q}>{q}x</th>)}</tr></thead>
+            <thead><tr><th></th>{bundles.map(b => <th key={b.id}>{b.label}</th>)}</tr></thead>
             <tbody>
-              <tr><td><strong>Bundle COGS</strong><span>{supplier?.currency || 'USD'}</span></td>{[1,2,3,4,5].map(q => <td key={q}><input type="number" step="0.01" value={bundleOverrides[q]?.cogs ?? ''} placeholder={String(Number(supplier?.cost_per_unit || 0) * q)} onChange={e => setBundle(q, 'cogs', e.target.value)} /></td>)}</tr>
-              <tr><td><strong>Selling price</strong><span>{market?.selling_currency || 'GBP'}</span></td>{[1,2,3,4,5].map(q => <td key={q}><input type="number" step="0.01" value={bundleOverrides[q]?.aov ?? ''} placeholder={suggestedPrices.find(x => x.qty === q)?.suggestions.find(s => s.margin === 0.20)?.price?.toFixed(2) || '0.00'} onChange={e => setBundle(q, 'aov', e.target.value)} /></td>)}</tr>
+              <tr><td><strong>Bundle COGS</strong><span>{supplier?.currency || 'USD'}</span></td>{bundles.map(b => <td key={b.id}><input type="number" step="0.01" value={bundleOverrides[b.id]?.cogs ?? ''} placeholder={String(Number(supplier?.cost_per_unit || 0) * b.units)} onChange={e => setBundle(b.id, 'cogs', e.target.value)} /></td>)}</tr>
+              <tr><td><strong>Selling price</strong><span>{market?.selling_currency || 'GBP'}</span></td>{bundles.map(b => <td key={b.id}><input type="number" step="0.01" value={bundleOverrides[b.id]?.aov ?? ''} placeholder={suggestedPrices.find(x => x.id === b.id)?.suggestions.find(s => s.margin === 0.20)?.price?.toFixed(2) || '0.00'} onChange={e => setBundle(b.id, 'aov', e.target.value)} /></td>)}</tr>
             </tbody>
           </table>
         </div>
@@ -700,11 +715,11 @@ function App() {
       </div>
       <div className="table-card">
         <table className="suggestions">
-          <thead><tr><th>Target pre-ad margin</th>{suggestedPrices.map(r => <th key={r.qty}>{r.qty}x</th>)}</tr></thead>
+          <thead><tr><th>Target pre-ad margin</th>{suggestedPrices.map(r => <th key={r.id}>{r.label}</th>)}</tr></thead>
           <tbody>
             {SUGGESTED_MARGINS.map(m => <tr key={m}>
               <td>{m === 0 ? 'Break-even before ads' : `${Math.round(m*100)}% pre-ad margin`}</td>
-              {suggestedPrices.map(r => <td key={r.qty}>{money(r.suggestions.find(s => s.margin === m)?.price || 0, market?.selling_currency || 'USD')}</td>)}
+              {suggestedPrices.map(r => <td key={r.id}>{money(r.suggestions.find(s => s.margin === m)?.price || 0, market?.selling_currency || 'USD')}</td>)}
             </tr>)}
           </tbody>
         </table>
@@ -715,7 +730,7 @@ function App() {
       <PanelTitle title={`Results in ${displayCurrency}`} subtitle="Use BEROAS for Ads Manager ROAS checks. Use target CPP for daily buying decisions." />
       <div className="table-card">
         <table className="results">
-          <thead><tr><th>Metric</th>{rows.map(r => <th key={r.qty}>{r.qty}x</th>)}</tr></thead>
+          <thead><tr><th>Metric</th>{rows.map(r => <th key={r.id}>{r.label}</th>)}</tr></thead>
           <tbody>
             <Result label="Selling price" value={rows.map(r => money(r.aovDisplay, displayCurrency))} />
             <Result label="Payment fees" value={rows.map(r => money(-r.feeDisplay, displayCurrency))} />
@@ -742,8 +757,8 @@ function App() {
         <button className="secondary small" onClick={() => setActiveTab('settings')}><Settings size={16}/> Edit rules</button>
       </div>
       <div className="recommendation-grid">
-        {recommendations.map(item => <div key={item.qty} className={`recommendation-card ${item.level}`}>
-          <div className="recommendation-top"><strong>{item.qty}x</strong><span>{item.label}</span></div>
+        {recommendations.map(item => <div key={item.id} className={`recommendation-card ${item.level}`}>
+          <div className="recommendation-top"><strong>{item.bundleLabel || `${item.qty}x`}</strong><span>{item.label}</span></div>
           <p>{item.text}</p>
           <small>BEROAS: {num(item.ber)} | Break-even CPP: {money(item.breakEvenCpp, displayCurrency)}</small>
         </div>)}
@@ -781,13 +796,15 @@ function buildRecommendations(rows, rules = DEFAULT_STATUS_RULES) {
     const ber = Number(r.ber || 0);
     const cpp = Number(r.preAdProfit || 0);
     if (!r.aovDisplay) {
-      return { qty: r.qty, ber, breakEvenCpp: cpp, level: 'neutral', label: 'No price yet', text: 'Add a selling price or apply an SRP preset first.' };
+      return { id: r.id, bundleLabel: r.label, qty: r.qty, ber, breakEvenCpp: cpp, level: 'neutral', label: 'No price yet', text: 'Add a selling price or apply an SRP preset first.' };
     }
     const match = cleanRules.find(rule => ber >= rule.minBer && ber <= rule.maxBer);
     if (!match) {
-      return { qty: r.qty, ber, breakEvenCpp: cpp, level: 'neutral', label: 'No matching status', text: 'No status rule covers this BEROAS range yet. Add or edit a rule below.' };
+      return { id: r.id, bundleLabel: r.label, qty: r.qty, ber, breakEvenCpp: cpp, level: 'neutral', label: 'No matching status', text: 'No status rule covers this BEROAS range yet. Add or edit a rule below.' };
     }
     return {
+      id: r.id,
+      bundleLabel: r.label,
       qty: r.qty,
       ber,
       breakEvenCpp: cpp,

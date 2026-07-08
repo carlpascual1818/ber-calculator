@@ -3,15 +3,35 @@ import { convertCurrency, getLatestRate } from './fx';
 export const TARGET_MARGINS = [0.10, 0.15, 0.20, 0.30, 0.40];
 export const SUGGESTED_MARGINS = [0, 0.10, 0.15, 0.20, 0.30, 0.40];
 
-export async function calculateRows({ supplier, market, processors, displayCurrency, opexPercent, bundleOverrides }) {
+// Straight unit-count bundles (1x-6x). "units" drives both the label and the
+// default COGS (cost_per_unit * units) when no manual override is entered.
+export const STRAIGHT_BUNDLES = [1, 2, 3, 4, 5, 6].map(q => ({ id: String(q), label: `${q}x`, units: q }));
+
+// "Buy X get Y free" style offers. units = total items shipped (paid + free),
+// which is what COGS is based on, since you still have to source/ship the free units.
+export const OFFER_BUNDLES = [
+  { id: '1', label: '1x', units: 1 },
+  { id: '2+1', label: '2+1x', units: 3 },
+  { id: '2+2', label: '2+2x', units: 4 },
+  { id: '3+1', label: '3+1x', units: 4 },
+  { id: '3+2', label: '3+2x', units: 5 },
+  { id: '3+3', label: '3+3x', units: 6 }
+];
+
+export const BUNDLE_MODES = { straight: STRAIGHT_BUNDLES, bundle: OFFER_BUNDLES };
+
+export const DEFAULT_BUNDLES = STRAIGHT_BUNDLES;
+
+export async function calculateRows({ supplier, market, processors, displayCurrency, opexPercent, bundleOverrides, bundles = DEFAULT_BUNDLES }) {
   if (!supplier || !market || !displayCurrency) return [];
 
   const activeProcessors = processors.filter(p => p.active);
   const rows = [];
 
-  for (let qty = 1; qty <= 5; qty++) {
-    const override = bundleOverrides?.[qty] || {};
-    const cogsInput = numberOrDefault(override.cogs, Number(supplier.cost_per_unit || 0) * qty);
+  for (const bundle of bundles) {
+    const { id, label, units } = bundle;
+    const override = bundleOverrides?.[id] || {};
+    const cogsInput = numberOrDefault(override.cogs, Number(supplier.cost_per_unit || 0) * units);
     const aovInput = numberOrDefault(override.aov, 0);
 
     const cogsDisplay = await convertCurrency(cogsInput, supplier.currency, displayCurrency);
@@ -41,7 +61,10 @@ export async function calculateRows({ supplier, market, processors, displayCurre
     });
 
     rows.push({
-      qty,
+      id,
+      label,
+      units,
+      qty: units,
       cogsInput,
       aovInput,
       cogsDisplay,
@@ -61,7 +84,7 @@ export async function calculateRows({ supplier, market, processors, displayCurre
   return rows;
 }
 
-export async function calculateSuggestedPrices({ supplier, market, processors, opexPercent, bundleOverrides }) {
+export async function calculateSuggestedPrices({ supplier, market, processors, opexPercent, bundleOverrides, bundles = DEFAULT_BUNDLES }) {
   if (!supplier || !market) return [];
 
   const activeProcessors = processors.filter(p => p.active);
@@ -74,9 +97,10 @@ export async function calculateSuggestedPrices({ supplier, market, processors, o
   const opexRate = Number(opexPercent || 0) / 100;
   const output = [];
 
-  for (let qty = 1; qty <= 5; qty++) {
-    const override = bundleOverrides?.[qty] || {};
-    const cogsInput = numberOrDefault(override.cogs, Number(supplier.cost_per_unit || 0) * qty);
+  for (const bundle of bundles) {
+    const { id, label, units } = bundle;
+    const override = bundleOverrides?.[id] || {};
+    const cogsInput = numberOrDefault(override.cogs, Number(supplier.cost_per_unit || 0) * units);
     const cogsSelling = await convertCurrency(cogsInput, supplier.currency, market.selling_currency);
 
     const suggestions = SUGGESTED_MARGINS.map(margin => {
@@ -90,7 +114,7 @@ export async function calculateSuggestedPrices({ supplier, market, processors, o
       };
     });
 
-    output.push({ qty, cogsSelling, suggestions });
+    output.push({ id, label, units, qty: units, cogsSelling, suggestions });
   }
 
   return output;
@@ -197,7 +221,7 @@ export async function calculateUpsell({ supplier, market, processors, displayCur
   return output;
 }
 
-export async function calculateAbandoned({ supplier, market, processors, displayCurrency, bundleOverrides, discountTiers }) {
+export async function calculateAbandoned({ supplier, market, processors, displayCurrency, bundleOverrides, discountTiers, bundles = DEFAULT_BUNDLES }) {
   if (!supplier || !market) return [];
 
   const activeProcessors = processors.filter(p => p.active);
@@ -214,10 +238,11 @@ export async function calculateAbandoned({ supplier, market, processors, display
   const tiers = Array.isArray(discountTiers) ? discountTiers : [];
   const output = [];
 
-  for (let qty = 1; qty <= 5; qty++) {
-    const override = bundleOverrides?.[qty] || {};
+  for (const bundle of bundles) {
+    const { id, label, units } = bundle;
+    const override = bundleOverrides?.[id] || {};
     const aov = numberOrDefault(override.aov, 0) * sellingToDisplay;
-    const cogsInput = numberOrDefault(override.cogs, Number(supplier.cost_per_unit || 0) * qty);
+    const cogsInput = numberOrDefault(override.cogs, Number(supplier.cost_per_unit || 0) * units);
     const cogsDisplay = await convertCurrency(cogsInput, supplier.currency, displayCur);
 
     const feeFull = aov * variableRate + fixedFee;
@@ -237,7 +262,10 @@ export async function calculateAbandoned({ supplier, market, processors, display
     });
 
     output.push({
-      qty,
+      id,
+      label,
+      units,
+      qty: units,
       currency: displayCur,
       aov,
       cogsSelling: cogsDisplay,
