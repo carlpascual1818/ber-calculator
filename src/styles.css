@@ -420,3 +420,4 @@ button.small {
 .head-controls { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
 .head-controls .compact-field { min-width:150px; }
 @media (max-width:720px) { .head-controls { width:100%; } .head-controls .compact-field { flex:1; } }
+.bundle-toggle-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}.bundle-toggle-chip{display:flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:999px;background:#f1f5f9;border:1px solid var(--line);font-size:12px;font-weight:800;color:#475569;cursor:pointer}.bundle-toggle-chip input{cursor:pointer}

@@ -68,6 +68,7 @@ function App() {
   const [scenarioName, setScenarioName] = useState('Default Scenario');
   const [bundleOverrides, setBundleOverrides] = useState({});
   const [pricingMode, setPricingMode] = useState(() => loadStored('ber_pricing_mode', 'straight'));
+  const [activeBundleIds, setActiveBundleIds] = useState(() => loadStored('ber_active_bundles', {}));
   const [rows, setRows] = useState([]);
   const [suggestedPrices, setSuggestedPrices] = useState([]);
   const [upsellOffers, setUpsellOffers] = useState(() => loadStored('ber_upsell_offers', DEFAULT_UPSELL_OFFERS));
@@ -99,11 +100,27 @@ function App() {
     if (!hasSupabase || session) loadData();
   }, [session]);
 
-  const bundles = useMemo(() => BUNDLE_MODES[pricingMode] || BUNDLE_MODES.straight, [pricingMode]);
+  const allBundlesForMode = useMemo(() => BUNDLE_MODES[pricingMode] || BUNDLE_MODES.straight, [pricingMode]);
+  const bundles = useMemo(() => {
+    const active = activeBundleIds[pricingMode];
+    if (!active || !active.length) return allBundlesForMode;
+    const filtered = allBundlesForMode.filter(b => active.includes(b.id));
+    return filtered.length ? filtered : allBundlesForMode;
+  }, [allBundlesForMode, activeBundleIds, pricingMode]);
 
   function changePricingMode(mode) {
     setPricingMode(mode);
     localStorage.setItem('ber_pricing_mode', JSON.stringify(mode));
+  }
+
+  function toggleBundleActive(id) {
+    setActiveBundleIds(prev => {
+      const current = prev[pricingMode] || allBundlesForMode.map(b => b.id);
+      const next = current.includes(id) ? current.filter(x => x !== id) : [...current, id];
+      const updated = { ...prev, [pricingMode]: next };
+      localStorage.setItem('ber_active_bundles', JSON.stringify(updated));
+      return updated;
+    });
   }
 
   const supplier = useMemo(() => suppliers.find(s => s.id === selectedSupplierId), [suppliers, selectedSupplierId]);
@@ -692,6 +709,12 @@ function App() {
             </Field>
             <Field label="Selling price currency" compact><select value={market?.selling_currency || 'GBP'} onChange={e => updateSelectedMarketSellingCurrency(e.target.value)}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select></Field>
           </div>
+        </div>
+        <div className="bundle-toggle-row">
+          {allBundlesForMode.map(b => <label key={b.id} className="bundle-toggle-chip">
+            <input type="checkbox" checked={bundles.some(x => x.id === b.id)} onChange={() => toggleBundleActive(b.id)} />
+            {b.label}
+          </label>)}
         </div>
         <div className="table-card">
           <table className="input-table">
