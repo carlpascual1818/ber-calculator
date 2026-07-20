@@ -11,6 +11,7 @@ export const STRAIGHT_BUNDLES = [1, 2, 3, 4, 5, 6].map(q => ({ id: String(q), la
 // which is what COGS is based on, since you still have to source/ship the free units.
 export const OFFER_BUNDLES = [
   { id: '1', label: '1x', units: 1 },
+  { id: '1+1', label: '1+1x', units: 2 },
   { id: '2+1', label: '2+1x', units: 3 },
   { id: '2+2', label: '2+2x', units: 4 },
   { id: '3+1', label: '3+1x', units: 4 },

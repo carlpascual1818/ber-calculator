@@ -69,6 +69,9 @@ function App() {
   const [bundleOverrides, setBundleOverrides] = useState({});
   const [pricingMode, setPricingMode] = useState(() => loadStored('ber_pricing_mode', 'straight'));
   const [activeBundleIds, setActiveBundleIds] = useState(() => loadStored('ber_active_bundles', {}));
+  const [customBundles, setCustomBundles] = useState(() => loadStored('ber_custom_bundles', { straight: [], bundle: [] }));
+  const [newBundlePaid, setNewBundlePaid] = useState('');
+  const [newBundleFree, setNewBundleFree] = useState('');
   const [rows, setRows] = useState([]);
   const [suggestedPrices, setSuggestedPrices] = useState([]);
   const [upsellOffers, setUpsellOffers] = useState(() => loadStored('ber_upsell_offers', DEFAULT_UPSELL_OFFERS));
@@ -100,7 +103,11 @@ function App() {
     if (!hasSupabase || session) loadData();
   }, [session]);
 
-  const allBundlesForMode = useMemo(() => BUNDLE_MODES[pricingMode] || BUNDLE_MODES.straight, [pricingMode]);
+  const allBundlesForMode = useMemo(() => {
+    const base = BUNDLE_MODES[pricingMode] || BUNDLE_MODES.straight;
+    const custom = customBundles[pricingMode] || [];
+    return [...base, ...custom];
+  }, [pricingMode, customBundles]);
   const bundles = useMemo(() => {
     const active = activeBundleIds[pricingMode];
     if (!active || !active.length) return allBundlesForMode;
@@ -118,6 +125,38 @@ function App() {
       const current = prev[pricingMode] || allBundlesForMode.map(b => b.id);
       const next = current.includes(id) ? current.filter(x => x !== id) : [...current, id];
       const updated = { ...prev, [pricingMode]: next };
+      localStorage.setItem('ber_active_bundles', JSON.stringify(updated));
+      return updated;
+    });
+  }
+
+  function addCustomBundle() {
+    const paid = Math.max(0, Math.floor(Number(newBundlePaid) || 0));
+    const free = Math.max(0, Math.floor(Number(newBundleFree) || 0));
+    if (paid <= 0 && free <= 0) return;
+    const units = paid + free;
+    const label = free > 0 ? `${paid}+${free}x` : `${paid}x`;
+    const id = `custom-${paid}-${free}-${Date.now()}`;
+    if (allBundlesForMode.some(b => b.label === label)) { setNewBundlePaid(''); setNewBundleFree(''); return; }
+    setCustomBundles(prev => {
+      const updated = { ...prev, [pricingMode]: [...(prev[pricingMode] || []), { id, label, units }] };
+      localStorage.setItem('ber_custom_bundles', JSON.stringify(updated));
+      return updated;
+    });
+    setNewBundlePaid('');
+    setNewBundleFree('');
+  }
+
+  function removeCustomBundle(id) {
+    setCustomBundles(prev => {
+      const updated = { ...prev, [pricingMode]: (prev[pricingMode] || []).filter(b => b.id !== id) };
+      localStorage.setItem('ber_custom_bundles', JSON.stringify(updated));
+      return updated;
+    });
+    setActiveBundleIds(prev => {
+      const current = prev[pricingMode];
+      if (!current) return prev;
+      const updated = { ...prev, [pricingMode]: current.filter(x => x !== id) };
       localStorage.setItem('ber_active_bundles', JSON.stringify(updated));
       return updated;
     });
@@ -704,7 +743,7 @@ function App() {
             <Field label="Bundle style" compact>
               <select value={pricingMode} onChange={e => changePricingMode(e.target.value)}>
                 <option value="straight">Straight (1x–6x)</option>
-                <option value="bundle">Offers (1x, 2+1x, 2+2x, 3+1x, 3+2x, 3+3x)</option>
+                <option value="bundle">Offers (1x, 1+1x, 2+1x…, or add your own)</option>
               </select>
             </Field>
             <Field label="Selling price currency" compact><select value={market?.selling_currency || 'GBP'} onChange={e => updateSelectedMarketSellingCurrency(e.target.value)}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</select></Field>
@@ -714,7 +753,16 @@ function App() {
           {allBundlesForMode.map(b => <label key={b.id} className="bundle-toggle-chip">
             <input type="checkbox" checked={bundles.some(x => x.id === b.id)} onChange={() => toggleBundleActive(b.id)} />
             {b.label}
+            {b.id.startsWith('custom-') && <span onClick={(e) => { e.preventDefault(); removeCustomBundle(b.id); }} style={{ marginLeft: 6, cursor: 'pointer', opacity: 0.6 }}>×</span>}
           </label>)}
+        </div>
+        <div className="bundle-toggle-row" style={{ alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 13, opacity: 0.7 }}>Add bundle:</span>
+          <input type="number" min="0" placeholder="Paid" value={newBundlePaid} onChange={e => setNewBundlePaid(e.target.value)} style={{ width: 60 }} />
+          <span style={{ opacity: 0.6 }}>+</span>
+          <input type="number" min="0" placeholder="Free" value={newBundleFree} onChange={e => setNewBundleFree(e.target.value)} style={{ width: 60 }} />
+          <span style={{ opacity: 0.6 }}>free</span>
+          <button className="chip" onClick={addCustomBundle}>Add</button>
         </div>
         <div className="table-card">
           <table className="input-table">
